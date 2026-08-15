@@ -34,6 +34,7 @@ from membridge.adapters.cockroach import (
 )
 from membridge.adapters.mem0 import Mem0Reader, build_config
 from membridge.cmm import MemoryBundle, MemoryRecord
+from membridge.fidelity import render_text, score
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -125,6 +126,25 @@ def main() -> None:
     # exists to handle -- see membridge/adapters/cockroach/types.py.
     print("vectors are compared bit-exactly, not approximately")
     print("ROUND TRIP INTACT" if intact else "ROUND TRIP LOSSY")
+
+    # -- and now the same question, asked by the module ---------------------
+    #
+    # The comparison above is kept rather than replaced, for the same reason
+    # tests/test_cmm_schema.py writes the mem0 mapping twice: it is an
+    # independent witness. If membridge.fidelity is ever refactored into
+    # agreeing with itself, this loop still disagrees.
+    report = score(source, target, target_system="cockroachdb")
+    print()
+    print(render_text(report))
+
+    if report.intact != intact:
+        raise SystemExit(
+            f"DISAGREEMENT: this script says {'intact' if intact else 'lossy'}, "
+            f"membridge.fidelity says {'intact' if report.intact else 'lossy'}. "
+            "One of them is wrong and the scorer is the one nobody has checked."
+        )
+    print()
+    print(f"[check]  membridge.fidelity agrees: {'intact' if report.intact else 'lossy'}")
 
     if not args.keep:
         with conn.cursor() as cur:
