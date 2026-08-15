@@ -21,10 +21,15 @@ So this module is deliberately suspicious of its own storage:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Iterator
 from uuid import UUID
 
-from membridge.adapters.cockroach.types import decode_vector
+from membridge.adapters.cockroach.types import (
+    decode_vector,
+    encode_vector,
+    is_unit_length,
+)
 from membridge.cmm import (
     Actor,
     Embedding,
@@ -42,8 +47,10 @@ FROM memory_bundle
 WHERE id = %s
 """
 
-_RECORD_SELECT = """
-SELECT
+# Spelled once and reused by every read path, because `_row_to_record` unpacks
+# positionally: a SELECT that drifts from this order does not fail, it silently
+# maps content into the fingerprint slot.
+_RECORD_COLUMNS = """
     id, cmm_version, content, content_fingerprint,
     scope_user_id, scope_agent_id, scope_session_id, scope_app_id,
     attribution, created_at, updated_at, expires_at,
@@ -51,9 +58,46 @@ SELECT
     embedding, embedding_model, embedding_dim, embedding_normalized,
     prov_source_system, prov_source_id, prov_source_version, prov_source_hash,
     prov_exported_at, prov_adapter
+"""
+
+_RECORD_SELECT = f"""
+SELECT {_RECORD_COLUMNS}
 FROM memory_record
 WHERE bundle_id = %s
 ORDER BY created_at, id
+"""
+
+# The scoped-L2 search the vector index exists to serve.
+#
+# Two details are load-bearing and neither is obvious from the query text:
+#
+#   * `scope_user_id = %s` is not merely a filter, it is what makes the index
+#     usable at all. `memory_record_embedding_idx` is prefix-partitioned on that
+#     column, and CockroachDB falls back to a FULL SCAN when a query does not
+#     match the prefix. Dropping the scope predicate to "search everything"
+#     would still return correct rows, just by reading the whole table.
+#   * `<->` (L2), never `<=>` (cosine). Cockroach accelerates only L2. This
+#     ranks identically to cosine *provided the vectors are unit length*, which
+#     `search` verifies rather than assumes -- see the guard there.
+_SIMILARITY_SEARCH = f"""
+SELECT {_RECORD_COLUMNS},
+    embedding <-> %(query)s::vector AS distance
+FROM memory_record
+WHERE scope_user_id = %(user_id)s
+  AND embedding IS NOT NULL
+  {{expiry_predicate}}
+ORDER BY embedding <-> %(query)s::vector
+LIMIT %(limit)s
+"""
+
+# Distinct embedding spaces present under one scope. A query vector compared
+# against a space it does not belong to yields a number that looks like a score
+# and means nothing -- the same confusion `Embedding` carries a model name to
+# prevent.
+_SCOPE_SPACES = """
+SELECT DISTINCT embedding_model, embedding_dim, embedding_normalized
+FROM memory_record
+WHERE scope_user_id = %s AND embedding IS NOT NULL
 """
 
 _BUNDLE_LIST = """
@@ -67,6 +111,32 @@ ORDER BY b.imported_at DESC
 
 class CockroachReadError(RuntimeError):
     """Raised when stored rows cannot be returned to CMM faithfully."""
+
+
+class EmbeddingSpaceMismatch(CockroachReadError):
+    """Raised when a query vector does not live in the space it is searched against.
+
+    Its own type because it is the one search failure a caller might reasonably
+    want to catch and recover from -- by re-embedding the query with the right
+    model -- rather than a sign the store is corrupt.
+    """
+
+
+@dataclass(frozen=True)
+class MemoryHit:
+    """One retrieved memory and how close it was.
+
+    `distance` is L2, as returned by CockroachDB. `similarity` is the cosine
+    equivalent, and is present only when the space is known unit-length: for
+    unit vectors ||a-b||^2 = 2 - 2*cos(a,b), so cosine is recoverable exactly
+    from L2. When it is None the ranking is still L2 and still correct as a
+    ranking -- there is simply no honest cosine number to report, and inventing
+    one is how a meaningless score ends up in a report looking authoritative.
+    """
+
+    record: MemoryRecord
+    distance: float
+    similarity: float | None
 
 
 class CockroachReader:
@@ -140,6 +210,110 @@ class CockroachReader:
             cur.execute(_RECORD_SELECT, (str(bundle_id),))
             for row in cur:
                 yield self._row_to_record(row)
+
+    # -- retrieval ---------------------------------------------------------
+
+    def scope_embedding_spaces(
+        self, user_id: str
+    ) -> list[tuple[str, int, bool | None]]:
+        """Every distinct (model, dim, normalized) held under one scope."""
+        with self.conn.cursor() as cur:
+            cur.execute(_SCOPE_SPACES, (user_id,))
+            return [(row[0], row[1], row[2]) for row in cur.fetchall()]
+
+    def search(
+        self,
+        query: Embedding,
+        *,
+        user_id: str,
+        limit: int = 5,
+        include_expired: bool = False,
+    ) -> list[MemoryHit]:
+        """Nearest memories to `query` within one user's scope.
+
+        This is the read an agent actually makes -- and the only path that uses
+        `memory_record_embedding_idx`, which until now was a declared index no
+        code ever asked a question of.
+
+        Three refusals, each protecting a number that would otherwise look fine:
+
+        1. **Mixed embedding spaces raise.** If the scope holds vectors from more
+           than one embedder, there is no single space to search and the
+           distances would not be mutually comparable. `MemoryBundle` raises on
+           this at export time for the same reason; a target that has accepted
+           two bundles can reach the state a single bundle cannot.
+        2. **A query from the wrong space raises** (`EmbeddingSpaceMismatch`).
+           Cosine or L2 between vectors from different embedders is a number
+           with no meaning that still sorts, so the failure is silent by
+           default: plausible-looking results in a plausible-looking order.
+        3. **Unnormalized vectors get no cosine number.** L2 ranks identically
+           to cosine only for unit-length vectors. Where that is unproven --
+           including where `embedding_normalized` is NULL, which means "no
+           adapter checked" and is not the same as false -- the hit carries
+           `similarity=None` rather than a converted value that would be wrong.
+
+        `include_expired` defaults to False, which looks like the `show_expired`
+        default this project criticises Mem0 for and is the opposite decision.
+        Mem0 hides expired records on the *migration* path, where the store's
+        own contents are the subject and dropping them loses data silently. This
+        is the *retrieval* path, feeding an agent that is about to act: serving a
+        memory the user expired is the "confidently wrong" failure that expiry
+        exists to prevent. The migration path in `read_bundle` still returns
+        every row.
+        """
+        spaces = self.scope_embedding_spaces(user_id)
+        if not spaces:
+            return []
+        if len(spaces) > 1:
+            raise CockroachReadError(
+                f"scope user_id={user_id!r} holds {len(spaces)} embedding spaces "
+                f"({', '.join(f'{m}/{d}' for m, d, _ in spaces)}). Distances across "
+                "spaces are not comparable, so there is no correct result to return."
+            )
+
+        model, dim, normalized = spaces[0]
+        if (query.model, query.dim) != (model, dim):
+            raise EmbeddingSpaceMismatch(
+                f"query vector is {query.model}/{query.dim} but this scope stores "
+                f"{model}/{dim}. Re-embed the query with {model} — comparing across "
+                "embedders produces a score that sorts but means nothing."
+            )
+
+        # Both sides must be unit length for the L2->cosine identity to hold. The
+        # stored side is the column (NULL = unchecked, not true); the query side
+        # is measured here, since a caller can hand over any vector.
+        unit_space = normalized is True and is_unit_length(query.vector)
+
+        sql = _SIMILARITY_SEARCH.format(
+            expiry_predicate=(
+                "" if include_expired else "AND (expires_at IS NULL OR expires_at >= now())"
+            )
+        )
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "query": encode_vector(query.vector),
+                    "user_id": user_id,
+                    "limit": limit,
+                },
+            )
+            rows = cur.fetchall()
+
+        hits = []
+        for row in rows:
+            distance = float(row[-1])
+            # cos = 1 - d^2/2 for unit vectors. Clamped because float32 storage
+            # can put an identical vector a hair past 1.0.
+            similarity = max(-1.0, min(1.0, 1.0 - (distance * distance) / 2.0))
+            hits.append(
+                MemoryHit(
+                    record=self._row_to_record(row[:-1]),
+                    distance=distance,
+                    similarity=similarity if unit_space else None,
+                )
+            )
+        return hits
 
     # -- mapping -----------------------------------------------------------
 

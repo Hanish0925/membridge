@@ -326,3 +326,208 @@ def test_a_failed_bundle_leaves_nothing_behind(conn: Any) -> None:
         assert cur.fetchone()[0] == 0
         cur.execute("SELECT count(*) FROM memory_bundle WHERE id = %s", (str(bundle_id),))
         assert cur.fetchone()[0] == 0
+
+
+# --- semantic retrieval, needs a live CockroachDB -------------------------
+#
+# The vector index existed in sql/schema.sql long before any code queried it,
+# which means "the index works" was an untested claim of exactly the kind this
+# project exists not to make. These are its falsifier.
+
+
+def _unit(dim: int, *components: float) -> list[float]:
+    """A unit-length 384d vector with the given leading components.
+
+    One-hot and near-one-hot vectors are genuinely norm 1.0, so the L2->cosine
+    identity holds and `similarity` is checkable against hand arithmetic rather
+    than against whatever the code happened to produce.
+    """
+    vector = [0.0] * dim
+    for index, value in enumerate(components):
+        vector[index] = value
+    return vector
+
+
+@pytest.fixture
+def scope(conn: Any) -> Any:
+    """A scope no other test has written to, dropped afterwards.
+
+    Search is scoped by user_id, so a leftover record from another test is not
+    inert -- it is an extra neighbour that changes the ranking under assertion.
+    """
+    from uuid import uuid4
+
+    user_id = f"search_{uuid4().hex[:12]}"
+    yield user_id
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM memory_record WHERE scope_user_id = %s", (user_id,))
+    conn.commit()
+
+
+def _seed(conn: Any, user_id: str, vectors: dict[str, list[float]], **kw: Any) -> None:
+    from uuid import uuid4
+
+    records = [
+        _record(
+            content=f"{user_id}: {label}",
+            scope=Scope(user_id=user_id),
+            provenance=Provenance(
+                source_system="mem0", source_id=f"{user_id}-{label}", exported_at=NOW
+            ),
+            embedding=Embedding(vector=vector, model="test-embedder", dim=384),
+            **kw,
+        )
+        for label, vector in vectors.items()
+    ]
+    CockroachWriter(conn).write_bundle(_bundle_with(records), bundle_id=uuid4())
+
+
+def test_search_ranks_by_distance(conn: Any, scope: str) -> None:
+    _seed(conn, scope, {
+        "alpha": _unit(384, 1.0),
+        "beta": _unit(384, 0.0, 1.0),
+        "gamma": _unit(384, 0.0, 0.0, 1.0),
+    })
+
+    # Closest to alpha, then beta, then gamma -- by hand:
+    #   d(q,alpha) = sqrt(0.04 + 0.36) = 0.632
+    #   d(q,beta)  = sqrt(0.64 + 0.16) = 0.894
+    #   d(q,gamma) = sqrt(0.64 + 0.36 + 1) = 1.414
+    query = Embedding(vector=_unit(384, 0.8, 0.6), model="test-embedder", dim=384)
+    hits = CockroachReader(conn).search(query, user_id=scope, limit=3)
+
+    assert [hit.record.content.split(": ")[1] for hit in hits] == ["alpha", "beta", "gamma"]
+    assert hits[0].distance == pytest.approx(0.632, abs=1e-3)
+    # cos = 1 - d^2/2; for q.alpha that is 0.8 exactly.
+    assert hits[0].similarity == pytest.approx(0.8, abs=1e-5)
+
+
+def test_search_returns_whole_cmm_records_not_just_ids(conn: Any, scope: str) -> None:
+    """A hit must be usable as memory, which means it is a verified record.
+
+    It goes through the same `_row_to_record` as the migration path, so the
+    fingerprint check applies here too: retrieval cannot serve an agent content
+    that has drifted from what was migrated.
+    """
+    _seed(conn, scope, {"alpha": _unit(384, 1.0)})
+    query = Embedding(vector=_unit(384, 1.0), model="test-embedder", dim=384)
+
+    (hit,) = CockroachReader(conn).search(query, user_id=scope, limit=5)
+    assert isinstance(hit.record, MemoryRecord)
+    assert hit.record.scope.user_id == scope
+    assert hit.record.provenance.source_system == "mem0"
+    assert hit.record.fingerprint() == hit.record.fingerprint()
+
+
+def test_search_refuses_a_query_from_a_different_embedder(conn: Any, scope: str) -> None:
+    """The silent-wrong-answer case: it would have sorted, and meant nothing."""
+    from membridge.adapters.cockroach import EmbeddingSpaceMismatch
+
+    _seed(conn, scope, {"alpha": _unit(384, 1.0)})
+    foreign = Embedding(vector=_unit(384, 1.0), model="some-other-embedder", dim=384)
+
+    with pytest.raises(EmbeddingSpaceMismatch, match="some-other-embedder"):
+        CockroachReader(conn).search(foreign, user_id=scope)
+
+
+def test_search_withholds_cosine_when_vectors_are_not_unit_length(
+    conn: Any, scope: str
+) -> None:
+    """L2 ranks like cosine only for unit vectors. Elsewhere: no number at all."""
+    _seed(conn, scope, {"alpha": _unit(384, 3.0)})  # norm 3, not 1
+    query = Embedding(vector=_unit(384, 1.0), model="test-embedder", dim=384)
+
+    (hit,) = CockroachReader(conn).search(query, user_id=scope)
+    assert hit.record.embedding.normalized is False
+    assert hit.distance == pytest.approx(2.0)
+    assert hit.similarity is None, "a cosine here would be arithmetic on a false premise"
+
+
+def test_search_hides_expired_memories_unless_asked(conn: Any, scope: str) -> None:
+    """The opposite call to `read_bundle`, deliberately.
+
+    Migration must see everything the store holds. Retrieval feeds an agent
+    about to act, and a memory the user expired is worse than a missing one.
+    """
+    _seed(conn, scope, {"alpha": _unit(384, 1.0)}, expires_at=NOW - timedelta(days=1))
+    query = Embedding(vector=_unit(384, 1.0), model="test-embedder", dim=384)
+    reader = CockroachReader(conn)
+
+    assert reader.search(query, user_id=scope) == []
+    assert len(reader.search(query, user_id=scope, include_expired=True)) == 1
+
+
+def test_search_is_scoped_and_does_not_leak_across_users(conn: Any, scope: str) -> None:
+    _seed(conn, scope, {"alpha": _unit(384, 1.0)})
+    query = Embedding(vector=_unit(384, 1.0), model="test-embedder", dim=384)
+
+    assert len(CockroachReader(conn).search(query, user_id=scope)) == 1
+    assert CockroachReader(conn).search(query, user_id="nobody_at_all") == []
+
+
+def test_the_vector_index_is_actually_used(conn: Any, scope: str) -> None:
+    """EXPLAIN, not faith.
+
+    sql/schema.sql documents that the index is prefix-partitioned on
+    scope_user_id and that an unscoped query falls back to a full scan. That is
+    the reason `search` requires a user_id, so it is worth pinning: if a future
+    Cockroach release changes planning, this fails rather than retrieval
+    quietly degrading to a scan of every memory in the store.
+
+    **This test seeds a thousand records, and has to.** The first version of it
+    asserted the same thing over a three-record table and failed -- not because
+    the index was broken, but because CockroachDB's planner correctly declines a
+    C-SPANN traversal when scanning the whole table is cheaper. Index usage is
+    therefore a claim about a populated store, not about the schema, and a
+    fixture-sized table cannot evidence it either way. Measured on v26.2.5: at
+    ~8 rows the planner picks `memory_record_scope_idx`; at 1000 it picks the
+    vector index.
+    """
+    import math
+    import random
+    from uuid import uuid4
+
+    random.seed(20260815)
+
+    def unit_vector() -> list[float]:
+        raw = [random.gauss(0, 1) for _ in range(384)]
+        norm = math.sqrt(sum(x * x for x in raw))
+        return [x / norm for x in raw]
+
+    records = [
+        _record(
+            content=f"{scope} memory {i}",
+            scope=Scope(user_id=scope),
+            provenance=Provenance(
+                source_system="mem0", source_id=f"{scope}-{i}", exported_at=NOW
+            ),
+            embedding=Embedding(vector=unit_vector(), model="test-embedder", dim=384),
+        )
+        for i in range(1000)
+    ]
+    CockroachWriter(conn).write_bundle(_bundle_with(records), bundle_id=uuid4())
+
+    vector = encode_vector(unit_vector())
+    with conn.cursor() as cur:
+        # Without fresh statistics the planner is choosing on stale row counts,
+        # which is the same trap as the three-record version of this test.
+        cur.execute("ANALYZE memory_record")
+        cur.execute(
+            "EXPLAIN SELECT id FROM memory_record WHERE scope_user_id = %s "
+            "ORDER BY embedding <-> %s::vector LIMIT 5",
+            (scope, vector),
+        )
+        scoped = "\n".join(row[0] for row in cur.fetchall())
+
+        cur.execute(
+            "EXPLAIN SELECT id FROM memory_record ORDER BY embedding <-> %s::vector LIMIT 5",
+            (vector,),
+        )
+        unscoped = "\n".join(row[0] for row in cur.fetchall())
+
+    assert "vector search" in scoped, f"scoped L2 should hit the index, got:\n{scoped}"
+    assert "vector search" not in unscoped, (
+        "an unscoped query cannot use a prefix-partitioned vector index; if this "
+        f"now passes, sql/schema.sql's justification for requiring a scope is "
+        f"stale:\n{unscoped}"
+    )

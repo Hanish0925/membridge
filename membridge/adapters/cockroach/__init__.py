@@ -19,6 +19,8 @@ from membridge.adapters.cockroach.reader import (
     ADAPTER_NAME as READER_ADAPTER_NAME,
     CockroachReadError,
     CockroachReader,
+    EmbeddingSpaceMismatch,
+    MemoryHit,
 )
 from membridge.adapters.cockroach.types import (
     as_float32,
@@ -44,6 +46,8 @@ __all__ = [
     "schema_sql",
     "CockroachReader",
     "CockroachReadError",
+    "EmbeddingSpaceMismatch",
+    "MemoryHit",
     "READER_ADAPTER_NAME",
     "CockroachWriter",
     "CockroachWriteError",
