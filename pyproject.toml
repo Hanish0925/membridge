@@ -12,8 +12,27 @@ dependencies = [
     "typer>=0.27.1",
 ]
 
+# The agent and the Lambda handler embed queries, and must do it in the same
+# space the migrated memories live in — MiniLM/384. They deliberately do NOT
+# reach for sentence-transformers to get there: it pulls in torch, ~2.5GB, which
+# does not fit in a Lambda zip. Same weights, run through onnxruntime instead.
+#
+# sentence-transformers stays a main dependency because the dump scripts use it
+# to write the ground-truth fixtures, and tests/test_embed.py checks the ONNX
+# encoder against it. That check is the only thing licensing the substitution.
+[project.optional-dependencies]
+agent = [
+    "onnxruntime>=1.20",
+    "tokenizers>=0.20",
+    "numpy>=1.26",
+]
+
+[project.scripts]
+membridge = "membridge.cli:app"
+
 [dependency-groups]
 dev = [
+    "onnxruntime>=1.28.0",
     "pytest>=9.1.1",
 ]
 
