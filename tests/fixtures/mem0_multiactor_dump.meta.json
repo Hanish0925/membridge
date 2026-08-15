@@ -1,0 +1,57 @@
+{
+  "generated_at": "2026-08-15T16:38:55.098239+00:00",
+  "generator": "scripts/dump_mem0_multiactor.py",
+  "purpose": "ground truth for agent_id, run_id, role, actor_id and expiration_date, none of which the Phase 0 single-user inferred dump can reach",
+  "scope": {
+    "user_id": "john_001",
+    "agent_id": "support_agent_v2",
+    "run_id": "thread_8891"
+  },
+  "infer": false,
+  "llm_invoked": false,
+  "messages_ingested": 5,
+  "records_extracted": 5,
+  "records_visible_by_default": 4,
+  "records_hidden_by_default_expiry": 1,
+  "expiration_dates": {
+    "expired": "2026-08-14",
+    "future": "2027-08-15",
+    "relative_to": "2026-08-15"
+  },
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "embedding_dim": 384,
+  "collection": "membridge_mem0_multiactor",
+  "sdk_versions": {
+    "mem0ai": "2.0.15",
+    "sentence-transformers": "5.6.1",
+    "qdrant-client": "1.18.0",
+    "pydantic": "2.13.4"
+  },
+  "record_fields": [
+    "actor_id",
+    "agent_id",
+    "created_at",
+    "expiration_date",
+    "hash",
+    "id",
+    "memory",
+    "metadata",
+    "role",
+    "run_id",
+    "updated_at",
+    "user_id"
+  ],
+  "qdrant_payload_keys": [
+    "actor_id",
+    "agent_id",
+    "created_at",
+    "data",
+    "expiration_date",
+    "hash",
+    "role",
+    "run_id",
+    "text_lemmatized",
+    "updated_at",
+    "user_id"
+  ]
+}

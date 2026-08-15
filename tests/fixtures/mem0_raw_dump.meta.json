@@ -1,0 +1,37 @@
+{
+  "generated_at": "2026-08-04T10:32:44.422922+00:00",
+  "generator": "scripts/dump_mem0.py",
+  "user_id": "john_001",
+  "turns_ingested": 4,
+  "records_extracted": 3,
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "embedding_dim": 384,
+  "llm_provider": "ollama",
+  "llm_model": "qwen2.5-coder:14b",
+  "sdk_versions": {
+    "mem0ai": "2.0.15",
+    "sentence-transformers": "5.6.1",
+    "qdrant-client": "1.18.0",
+    "ollama": "0.6.2",
+    "openai": "2.53.0",
+    "pydantic": "2.13.4",
+    "torch": "2.13.0",
+    "transformers": "5.14.1"
+  },
+  "embeddings": {
+    "returned_by_get_all": false,
+    "vector_store_probe": {
+      "reachable": true,
+      "dims": 384,
+      "payload_keys": [
+        "attributed_to",
+        "created_at",
+        "data",
+        "hash",
+        "text_lemmatized",
+        "updated_at",
+        "user_id"
+      ]
+    }
+  }
+}
