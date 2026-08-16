@@ -33,7 +33,15 @@ PROVIDERS: dict[str, tuple[str, str, str]] = {
     ),
     "gemini": (
         "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        "gemini-2.5-flash",
+        # An alias rather than a pinned version, which is the opposite of what
+        # this project does everywhere else -- and for a reason it learned the
+        # hard way. `gemini-2.5-flash` was the pinned default here until it
+        # started answering 404 "no longer available to new users": a pin is
+        # only reproducible while the vendor still serves it, and a demo that
+        # 404s for whoever clones this next is worse than one whose model
+        # drifts. The claim being demonstrated is about the memory layer, which
+        # does not depend on which model reads it.
+        "gemini-flash-latest",
         "GEMINI_API_KEY",
     ),
 }

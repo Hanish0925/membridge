@@ -17,6 +17,10 @@ can interrogate rather than take on trust.
 
 First real target pair: **Mem0 → CockroachDB**.
 
+**Live demo:** http://membridge-demo-587104705068.s3-website-us-east-1.amazonaws.com
+**API:** https://mz86k14151.execute-api.us-east-1.amazonaws.com — try
+`curl -s https://mz86k14151.execute-api.us-east-1.amazonaws.com/health`
+
 ```
 Mem0 (Qdrant + local LLM)  ──read──▶  CMM  ──write──▶  CockroachDB Cloud
                                        │                    │
@@ -85,12 +89,13 @@ rejected. `sql/verify_constraints.sql` is the falsifier — 14 cases asserting e
 constraint rejects what it claims to. All 14 verified on CockroachDB **v26.2.5**
 (Cloud) and **v25.4.0** (local).
 
-### AWS (2 services)
+### AWS (3 services)
 
 | Service | What it actually does here |
 |---|---|
-| **AWS Lambda** | Runs the agent and the retrieval API behind a Function URL. Holds the ONNX encoder and the database connection across warm invocations, and holds nothing about the user between requests — the zero-persistence constraint is enforced at the deployment boundary, not just in a docstring. |
-| **Amazon S3** | Serves the static demo site, and stores the 90MB MiniLM ONNX model that Lambda pulls into `/tmp` on cold start. Keeping the model out of the deployment package is what keeps a code update a ~40MB upload instead of a ~130MB one. |
+| **AWS Lambda** | Runs the agent and the retrieval API. Holds the ONNX encoder and the database connection across warm invocations, and holds nothing about the user between requests — the zero-persistence constraint is enforced at the deployment boundary, not just in a docstring. |
+| **Amazon S3** | Serves the static demo site, stores the 90MB MiniLM ONNX model that Lambda pulls into `/tmp` on cold start, and carries the deployment package itself. Keeping the model out of the package is what keeps a code update a ~48MB upload instead of a ~140MB one. |
+| **Amazon API Gateway** | The public HTTP entry point. Not the original design — a Lambda Function URL was, and it returns `403 AccessDeniedException` to anonymous callers despite `AuthType: NONE` and a resource policy granting `lambda:InvokeFunctionUrl` to `Principal: "*"`, with no organization or SCP in play. API Gateway invokes Lambda as a service principal rather than publicly, which sidesteps it. |
 
 Both in `us-east-1`, the same region as the cluster: the agent makes several
 scoped vector queries per answer, so a cross-region hop would be paid repeatedly
@@ -161,13 +166,22 @@ Put the connection string in `.env`:
 
 ```
 MEMBRIDGE_COCKROACH_DSN=postgresql://membridge:<password>@<host>:26257/membridge?sslmode=verify-full
-GROQ_API_KEY=<from console.groq.com/keys>
+GROQ_API_KEY=<from console.groq.com/keys>          # for local use
+GEMINI_API_KEY=<from aistudio.google.com/apikey>   # for the deployed agent
 ```
 
-> CockroachDB Cloud serves a Let's Encrypt certificate, but `sslmode=verify-full`
-> makes libpq look in `~/.postgresql/root.crt` and OpenSSL's trust store may not
-> carry ISRG Root X1. If the connection fails on certificate verification:
-> `curl --create-dirs -o ~/.postgresql/root.crt https://cockroachlabs.cloud/clusters/<cluster-id>/cert`
+> **Two LLM keys, and it is not belt-and-braces.** Groq serves `GET /models`
+> from an AWS IP perfectly well and returns `401 Invalid API Key` for
+> `POST /chat/completions` with that same key — the key is fine, the source
+> address is not. So Groq is the local default and Gemini is what the deployed
+> function uses. Either works on a laptop; only Gemini works from Lambda.
+
+> **TLS needs no setup.** `sslmode=verify-full` normally sends libpq looking for
+> `~/.postgresql/root.crt`, which does not exist on a fresh machine, and
+> `sslrootcert=system` resolves to a trust store that lacks ISRG Root X1 on
+> macOS and fails outright in Lambda. `config.with_trusted_ca` points a
+> verifying DSN at certifi's bundle instead, so verification stays full and
+> depends on nothing about the host.
 
 Then:
 
@@ -220,6 +234,19 @@ Idempotent; run it again to push new code. It prints the site URL and the API
 URL. Note that it makes one S3 bucket publicly readable — a demo URL has to be
 reachable without credentials. The DSN and the API key are set only as Lambda
 environment variables; they are never in the bucket and never in the page.
+
+Two things in that script look arbitrary and are not:
+
+- **The runtime is `python3.13`, not `python3.11`.** Lambda's 3.11 is Amazon
+  Linux 2 (glibc 2.26), which only accepts `manylinux2014` wheels — and the
+  newest onnxruntime published for that tag is 1.16.3, compiled against numpy
+  1.x. Installed next to the numpy 2.x that resolves alongside it, the function
+  dies on import with `_ARRAY_API not found`, which reads as a numpy bug and is
+  really a wheel-tag one. 3.13 is Amazon Linux 2023, so `manylinux_2_28` applies
+  and onnxruntime 1.28 installs — the pairing the tests already run against.
+- **The package goes up via S3, not `--zip-file`.** It is ~48MB against a 50MB
+  inline limit; the S3 path allows 250MB, so a dependency bump does not become a
+  deploy failure with a misleading "request entity too large".
 
 ---
 
