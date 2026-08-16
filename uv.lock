@@ -739,6 +739,7 @@ name = "membridge"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "certifi" },
     { name = "mem0ai" },
     { name = "ollama" },
     { name = "psycopg", extra = ["binary"] },
@@ -764,6 +765,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "certifi", specifier = ">=2024.2.2" },
     { name = "mem0ai", specifier = ">=2.0.15" },
     { name = "numpy", marker = "extra == 'agent'", specifier = ">=1.26" },
     { name = "ollama", specifier = ">=0.6.2" },

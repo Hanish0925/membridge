@@ -16,7 +16,7 @@
 # us-east-1. The agent makes several scoped vector queries per answer, so a
 # cross-region hop would be paid repeatedly per request rather than once.
 #
-# Reads MEMBRIDGE_COCKROACH_DSN and GROQ_API_KEY from .env. Neither is baked
+# Reads MEMBRIDGE_COCKROACH_DSN and an LLM key from .env. Neither is baked
 # into the package; both are set as Lambda environment variables.
 #
 # NOTE: this makes a bucket publicly readable, because a "functional demo URL"
@@ -29,7 +29,7 @@ set -euo pipefail
 REGION="us-east-1"
 FUNCTION="membridge-api"
 ROLE="membridge-lambda"
-RUNTIME="python3.11"
+RUNTIME="python3.13"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="${REPO_ROOT}/build"
 
@@ -47,7 +47,14 @@ ACCOUNT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null
 [ -f "${REPO_ROOT}/.env" ] || die ".env not found; it must hold MEMBRIDGE_COCKROACH_DSN"
 set -a; . "${REPO_ROOT}/.env"; set +a
 [ -n "${MEMBRIDGE_COCKROACH_DSN:-}" ] || die "MEMBRIDGE_COCKROACH_DSN is not set in .env"
-[ -n "${GROQ_API_KEY:-}" ] || die "GROQ_API_KEY is not set in .env (get one at console.groq.com/keys)"
+# Either provider will do, but one must be set or the agent cannot answer.
+# Groq is the local default and is *not* usable from Lambda: it serves
+# GET /models happily from an AWS IP and returns 401 "Invalid API Key" for
+# POST /chat/completions with the very same key. The key is fine; the source
+# address is not. MEMBRIDGE_LLM_PROVIDER therefore defaults to gemini here
+# while staying groq on a laptop.
+[ -n "${GEMINI_API_KEY:-}${GROQ_API_KEY:-}" ] \
+  || die "set GEMINI_API_KEY (aistudio.google.com/apikey) or GROQ_API_KEY in .env"
 
 MODEL_ONNX="$(find "${MODEL_SNAPSHOT}" -name model.onnx 2>/dev/null | head -1)"
 TOKENIZER="$(find "${MODEL_SNAPSHOT}" -name tokenizer.json 2>/dev/null | head -1)"
@@ -86,10 +93,19 @@ rm -rf "${BUILD}/pkg" && mkdir -p "${BUILD}/pkg"
 # Linux wheels, not this machine's. Only what the handler actually reaches:
 # mem0, sentence-transformers, torch and typer are all absent on purpose --
 # migration runs from a laptop, retrieval runs here.
+#
+# The platform and runtime are load-bearing together. Lambda's python3.11 is
+# Amazon Linux 2 (glibc 2.26), which only accepts manylinux2014 wheels -- and
+# the newest onnxruntime published for manylinux2014 is 1.16.3, compiled
+# against numpy 1.x. Paired with the numpy 2.x that resolves alongside it, the
+# function dies on import with `_ARRAY_API not found`, which reads as a numpy
+# bug and is really a wheel-tag one. python3.13 is Amazon Linux 2023 (glibc
+# 2.34), so manylinux_2_28 applies and onnxruntime 1.28 installs -- the same
+# pairing the tests run against locally.
 uv pip install --quiet \
-  --python-platform x86_64-manylinux2014 --python-version 3.11 \
+  --python-platform x86_64-manylinux_2_28 --python-version 3.13 \
   --only-binary=:all: --target "${BUILD}/pkg" \
-  onnxruntime numpy tokenizers "psycopg[binary]" pydantic
+  onnxruntime numpy tokenizers "psycopg[binary]" pydantic certifi
 
 # onnxruntime declares sympy for symbolic shape inference, which inference never
 # calls; huggingface_hub is only reached when MEMBRIDGE_ONNX_DIR is unset, and
@@ -102,9 +118,15 @@ find "${BUILD}/pkg" -name "*.dist-info" -type d -prune -exec rm -rf {} + 2>/dev/
 cp -r "${REPO_ROOT}/membridge" "${BUILD}/pkg/membridge"
 find "${BUILD}/pkg/membridge" -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
 
+rm -f "${BUILD}/lambda.zip"
 (cd "${BUILD}/pkg" && zip -qr "${BUILD}/lambda.zip" .)
 printf '    package: %s unzipped, %s zipped\n' \
   "$(du -sh "${BUILD}/pkg" | cut -f1)" "$(du -h "${BUILD}/lambda.zip" | cut -f1)"
+
+# Uploaded to S3 rather than passed inline. `--zip-file` caps at 50MB and this
+# package is ~48MB; the S3 path allows 250MB, so a dependency bump does not
+# turn into a deploy failure with a misleading "request entity too large".
+aws s3 cp "${BUILD}/lambda.zip" "s3://${BUCKET}/deploy/lambda.zip" --only-show-errors
 
 # --- the role --------------------------------------------------------------
 
@@ -129,22 +151,34 @@ ROLE_ARN="$(aws iam get-role --role-name "${ROLE}" --query Role.Arn --output tex
 
 # --- the function ----------------------------------------------------------
 
-ENV_VARS="Variables={MEMBRIDGE_COCKROACH_DSN=${MEMBRIDGE_COCKROACH_DSN},GROQ_API_KEY=${GROQ_API_KEY},MEMBRIDGE_ONNX_S3=${BUCKET}/model,MEMBRIDGE_LLM_PROVIDER=${MEMBRIDGE_LLM_PROVIDER:-groq}}"
+# The DSN goes across unchanged. Making it work in Lambda is the adapter's job
+# -- `config.with_trusted_ca` points a verifying DSN at certifi's CA bundle,
+# because neither libpq's default (~/.postgresql/root.crt) nor
+# `sslrootcert=system` resolves in both this laptop and the Lambda sandbox.
+LAMBDA_PROVIDER="${MEMBRIDGE_LLM_PROVIDER:-${GEMINI_API_KEY:+gemini}}"
+LAMBDA_PROVIDER="${LAMBDA_PROVIDER:-groq}"
+ENV_VARS="Variables={MEMBRIDGE_COCKROACH_DSN=${MEMBRIDGE_COCKROACH_DSN},GROQ_API_KEY=${GROQ_API_KEY:-},GEMINI_API_KEY=${GEMINI_API_KEY:-},MEMBRIDGE_ONNX_S3=${BUCKET}/model,MEMBRIDGE_LLM_PROVIDER=${LAMBDA_PROVIDER}}"
 
 if aws lambda get-function --function-name "${FUNCTION}" >/dev/null 2>&1; then
   say "updating ${FUNCTION}"
   aws lambda update-function-code --function-name "${FUNCTION}" \
-    --zip-file "fileb://${BUILD}/lambda.zip" --query LastModified --output text
+    --s3-bucket "${BUCKET}" --s3-key deploy/lambda.zip \
+    --query LastModified --output text
   aws lambda wait function-updated --function-name "${FUNCTION}"
+  # --runtime is repeated on update, not just create: the package is built for
+  # one runtime's glibc, so a function left on an older one loads wheels it
+  # cannot run.
   aws lambda update-function-configuration --function-name "${FUNCTION}" \
-    --environment "${ENV_VARS}" --query LastModified --output text
+    --runtime "${RUNTIME}" --environment "${ENV_VARS}" \
+    --query LastModified --output text
+  aws lambda wait function-updated --function-name "${FUNCTION}"
 else
   say "creating ${FUNCTION}"
   aws lambda create-function --function-name "${FUNCTION}" \
     --runtime "${RUNTIME}" --architectures x86_64 \
     --role "${ROLE_ARN}" \
     --handler membridge.serve.lambda_handler.handler \
-    --zip-file "fileb://${BUILD}/lambda.zip" \
+    --code "S3Bucket=${BUCKET},S3Key=deploy/lambda.zip" \
     --environment "${ENV_VARS}" \
     `# 1536MB is for CPU, not memory: Lambda scales cores with memory and the` \
     `# MiniLM forward pass is the slowest thing in a request.` \
@@ -156,6 +190,35 @@ else
   aws lambda wait function-active --function-name "${FUNCTION}"
 fi
 
+# --- the public entry point ------------------------------------------------
+#
+# An API Gateway HTTP API rather than the Lambda Function URL, for a reason
+# worth recording: the Function URL is created below and works when invoked
+# with credentials, but returns 403 AccessDeniedException to anonymous callers
+# even with `AuthType: NONE` and a resource policy granting
+# `lambda:InvokeFunctionUrl` to `Principal: "*"`. No organization or SCP is in
+# play. API Gateway sidesteps it entirely because it invokes Lambda as the
+# `apigateway.amazonaws.com` service principal -- ordinary cross-service
+# access, not public access.
+
+API_ID="$(aws apigatewayv2 get-apis --query "Items[?Name=='${FUNCTION}-http'].ApiId | [0]" --output text)"
+if [ "${API_ID}" = "None" ] || [ -z "${API_ID}" ]; then
+  say "creating the HTTP API"
+  FUNCTION_ARN="$(aws lambda get-function --function-name "${FUNCTION}" \
+    --query Configuration.FunctionArn --output text)"
+  # --target quick-creates the integration, a $default route catching every
+  # path, and an auto-deploying $default stage.
+  API_ID="$(aws apigatewayv2 create-api --name "${FUNCTION}-http" \
+    --protocol-type HTTP --target "${FUNCTION_ARN}" \
+    --cors-configuration 'AllowOrigins=*,AllowMethods=GET,POST,OPTIONS,AllowHeaders=content-type' \
+    --query ApiId --output text)"
+  aws lambda add-permission --function-name "${FUNCTION}" \
+    --statement-id apigateway-invoke --action lambda:InvokeFunction \
+    --principal apigateway.amazonaws.com \
+    --source-arn "arn:aws:execute-api:${REGION}:${ACCOUNT}:${API_ID}/*/*" >/dev/null
+fi
+API_URL="https://${API_ID}.execute-api.${REGION}.amazonaws.com"
+
 if ! aws lambda get-function-url-config --function-name "${FUNCTION}" >/dev/null 2>&1; then
   say "creating the Function URL"
   aws lambda create-function-url-config --function-name "${FUNCTION}" \
@@ -166,7 +229,7 @@ if ! aws lambda get-function-url-config --function-name "${FUNCTION}" >/dev/null
     --statement-id public-function-url --action lambda:InvokeFunctionUrl \
     --principal "*" --function-url-auth-type NONE >/dev/null
 fi
-API_URL="$(aws lambda get-function-url-config --function-name "${FUNCTION}" \
+FUNCTION_URL="$(aws lambda get-function-url-config --function-name "${FUNCTION}" \
   --query FunctionUrl --output text)"
 
 # --- the static site -------------------------------------------------------
@@ -182,4 +245,5 @@ SITE_URL="http://${BUCKET}.s3-website-${REGION}.amazonaws.com"
 say "deployed"
 printf '    demo : %s\n' "${SITE_URL}"
 printf '    api  : %s\n' "${API_URL}"
-printf '\n    check it: curl -s %shealth\n\n' "${API_URL}"
+printf '    (function url, 403s anonymously -- see the comment above: %s)\n' "${FUNCTION_URL}"
+printf '\n    check it: curl -s %s/health\n\n' "${API_URL}"

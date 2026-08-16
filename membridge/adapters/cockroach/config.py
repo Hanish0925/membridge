@@ -36,14 +36,46 @@ SCHEMA_RELATIONS = ("memory_bundle", "memory_record")
 
 
 def dsn() -> str:
-    return os.environ.get("MEMBRIDGE_COCKROACH_DSN", DEFAULT_DSN)
+    return with_trusted_ca(os.environ.get("MEMBRIDGE_COCKROACH_DSN", DEFAULT_DSN))
+
+
+def with_trusted_ca(raw: str) -> str:
+    """Give a verifying DSN a CA bundle it can actually find.
+
+    `sslmode=verify-full` is the right setting and its default trust store is
+    not portable. libpq looks in `~/.postgresql/root.crt` and errors when that
+    is absent -- which it is on a fresh laptop, and in Lambda, where the error
+    helpfully names `/home/sbx_user1051/.postgresql`. The documented escape,
+    `sslrootcert=system`, hands the problem to OpenSSL's compiled-in path, and
+    psycopg's binary wheel ships its *own* OpenSSL: on macOS that store lacks
+    ISRG Root X1, which is what CockroachDB Cloud's certificate chains to, and
+    in Lambda it fails verification outright.
+
+    So neither default works in either place, and the two failures look
+    different, which makes it tempting to drop to `sslmode=require` -- that
+    "fixes" it by disabling verification entirely while still looking encrypted.
+    Pointing at certifi's bundle keeps verification full everywhere and depends
+    on no host state at all.
+
+    Only applied when the caller is verifying and has not named a bundle, so an
+    explicit `sslrootcert=` and the insecure local default both pass through
+    untouched.
+    """
+    verifying = "verify-ca" in raw or "verify-full" in raw
+    if "sslrootcert=" in raw or not verifying:
+        return raw
+    try:
+        import certifi
+    except ImportError:
+        return raw
+    return f"{raw}{'&' if '?' in raw else '?'}sslrootcert={certifi.where()}"
 
 
 def connect(dsn_override: str | None = None, **kwargs: Any) -> Any:
     """Open a connection. Imported late so the module stays importable without a driver."""
     import psycopg
 
-    return psycopg.connect(dsn_override or dsn(), **kwargs)
+    return psycopg.connect(with_trusted_ca(dsn_override) if dsn_override else dsn(), **kwargs)
 
 
 def schema_sql() -> str:

@@ -3,6 +3,11 @@ name = "membridge"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+    # The CA bundle the CockroachDB DSN points at. Not decoration: libpq's
+    # default trust path and `sslrootcert=system` each fail on one of the two
+    # platforms this runs on, and the tempting workaround is to stop verifying.
+    # See membridge/adapters/cockroach/config.py:with_trusted_ca.
+    "certifi>=2024.2.2",
     "mem0ai>=2.0.15",
     "ollama>=0.6.2",
     "psycopg[binary]>=3.3.4",
