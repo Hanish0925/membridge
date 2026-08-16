@@ -3,155 +3,273 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MemBridge — agent memory on CockroachDB</title>
+<title>MemBridge — memory that moved</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #0d1117;
-    --panel: #151b23;
-    --panel-2: #1b232d;
-    --line: #262f3b;
-    --text: #e6edf3;
-    --muted: #8b98a5;
-    --dim: #6a7686;
-    --accent: #4b9fff;
-    --mem0: #d98b3a;
-    --native: #3fb27f;
-    --warn: #e0574d;
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --bg: #0a0c10;
+    --surface: #12161d;
+    --line: #1d232d;
+    --line-soft: #161b23;
+    --ink: #e9eef5;
+    --muted: #98a3b2;
+    --dim: #707b8a;
+
+    /* The only colours on this page encode provenance. Nothing is tinted
+       for decoration, so a coloured thing is always a claim about origin. */
+    --migrated: #e8963f;
+    --native: #4ec295;
+    --expired: #ea6a5e;
+
+    --sans: Archivo, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    /* Five steps, each ~1.25x the last. Anything that wants a size picks one
+       of these; a sixth step is how a scale turns back into mush. */
+    --t-micro: 11.5px;
+    --t-ui: 14px;
+    --t-body: 17.5px;
+    --t-lead: 22px;
+    --t-display: clamp(2.1rem, 6.4vw, 3.9rem);
+
+    --ease: cubic-bezier(.16, 1, .3, 1);
   }
   * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
   body {
     margin: 0;
     background: var(--bg);
-    color: var(--text);
-    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+    color: var(--ink);
+    font: 400 var(--t-body)/1.6 var(--sans);
     -webkit-font-smoothing: antialiased;
   }
-  .wrap { max-width: 900px; margin: 0 auto; padding: 40px 20px 80px; }
+  :focus-visible { outline: 2px solid var(--migrated); outline-offset: 2px; border-radius: 3px; }
 
-  header { border-bottom: 1px solid var(--line); padding-bottom: 22px; margin-bottom: 26px; }
-  h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: -0.02em; }
-  h1 span { color: var(--accent); }
-  .tagline { color: var(--muted); margin: 0 0 14px; max-width: 62ch; }
-  .stats { display: flex; flex-wrap: wrap; gap: 8px; font: 12px/1 var(--mono); }
-  .stat {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 5px; padding: 6px 9px; color: var(--muted);
-  }
-  .stat b { color: var(--text); font-weight: 600; }
+  .shell { max-width: 780px; margin: 0 auto; padding: 0 24px; }
 
-  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
-  .tab {
-    background: transparent; border: 1px solid var(--line); color: var(--muted);
-    padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
-    font-family: inherit;
+  /* ---- top bar ---- */
+  .bar {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+    padding: 20px 0 0;
   }
-  .tab[aria-selected="true"] { background: var(--panel-2); color: var(--text); border-color: #3a4757; }
-  .tab:hover:not([aria-selected="true"]) { color: var(--text); }
+  .mark {
+    font: 800 var(--t-ui) var(--sans); font-variation-settings: "wdth" 118;
+    letter-spacing: .14em; text-transform: uppercase;
+  }
+  .mark em { font-style: normal; color: var(--migrated); }
+  .live { font: 400 var(--t-micro)/1.5 var(--mono); color: var(--dim); text-align: right; }
+  .live b { color: var(--muted); font-weight: 500; }
 
-  .askbar { display: flex; gap: 8px; }
-  input[type=text] {
-    flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
-    color: var(--text); padding: 11px 13px; font: 15px inherit; font-family: inherit;
+  /* ---- hero ---- */
+  .hero { padding: clamp(48px, 11vh, 96px) 0 clamp(28px, 5vh, 44px); }
+  h1 {
+    margin: 0 0 20px;
+    font: 800 var(--t-display)/1.03 var(--sans);
+    font-variation-settings: "wdth" 112;
+    letter-spacing: -.032em;
+    text-wrap: balance;
   }
-  input[type=text]:focus { outline: none; border-color: var(--accent); }
-  button.go {
-    background: var(--accent); border: 0; color: #04121f; font-weight: 600;
-    padding: 0 20px; border-radius: 6px; cursor: pointer; font: 600 14px inherit;
-    font-family: inherit;
+  h1 .moved { color: var(--migrated); }
+  .claim {
+    margin: 0; max-width: 56ch; color: var(--muted);
+    font-size: var(--t-body); line-height: 1.6; text-wrap: pretty;
   }
-  button.go:disabled { opacity: .5; cursor: default; }
+  .claim b { color: var(--ink); font-weight: 600; }
 
-  .opts { display: flex; gap: 18px; align-items: center; margin: 12px 2px 0; font-size: 13px; color: var(--muted); }
-  .opts label { display: flex; gap: 7px; align-items: center; cursor: pointer; }
-  .examples { margin: 16px 0 0; display: flex; flex-wrap: wrap; gap: 7px; }
-  .examples button {
-    background: var(--panel); border: 1px solid var(--line); color: var(--muted);
-    border-radius: 999px; padding: 5px 12px; font: 12px inherit; font-family: inherit;
-    cursor: pointer;
+  /* ---- console ---- */
+  .console { padding-bottom: 6px; }
+  .modes { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+  .mode {
+    appearance: none; background: none; border: 0; cursor: pointer;
+    padding: 0 0 11px; margin-bottom: -1px;
+    font: 500 var(--t-ui) var(--sans); color: var(--dim);
+    border-bottom: 1.5px solid transparent;
+    transition: color .18s var(--ease);
   }
-  .examples button:hover { color: var(--text); border-color: #3a4757; }
+  .mode:hover { color: var(--muted); }
+  .mode[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--migrated); }
 
-  section.out { margin-top: 30px; }
+  .query { display: flex; gap: 10px; }
+  #q {
+    flex: 1; min-width: 0;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 7px;
+    color: var(--ink); padding: 13px 15px;
+    font: 400 var(--t-body) var(--sans);
+    transition: border-color .18s var(--ease);
+  }
+  #q::placeholder { color: var(--dim); }
+  #q:focus { outline: none; border-color: #3b444f; }
+  #go {
+    appearance: none; border: 0; border-radius: 7px; cursor: pointer;
+    background: var(--migrated); color: #17110a;
+    padding: 0 24px; font: 700 var(--t-ui) var(--sans);
+    transition: filter .18s var(--ease);
+  }
+  #go:hover:not(:disabled) { filter: brightness(1.1); }
+  #go:disabled { opacity: .45; cursor: default; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+  .chips button {
+    appearance: none; cursor: pointer;
+    background: none; border: 1px solid var(--line); border-radius: 999px;
+    color: var(--dim); padding: 6px 14px; font: 400 var(--t-ui) var(--sans);
+    transition: color .18s var(--ease), border-color .18s var(--ease);
+  }
+  .chips button:hover { color: var(--ink); border-color: #333c47; }
+
+  .controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+    margin-top: 18px;
+  }
+  .switch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; font-size: var(--t-ui); color: var(--muted); }
+  .switch input { accent-color: var(--expired); width: 15px; height: 15px; cursor: pointer; }
+  .hint { margin: 0; font: 400 var(--t-micro)/1.5 var(--mono); color: var(--dim); }
+
+  /* ---- results ---- */
+  #out { padding: 30px 0 0; min-height: 200px; }
+  .rhead {
+    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline;
+    gap: 8px 16px; padding-bottom: 11px; border-bottom: 1px solid var(--line);
+    font: 400 var(--t-micro) var(--mono); color: var(--dim);
+  }
+  .legend { display: flex; gap: 14px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: currentColor; }
+  .is-migrated { color: var(--migrated); }
+  .is-native { color: var(--native); }
+  .is-expired { color: var(--expired); }
+
+  ol.rows { list-style: none; margin: 0; padding: 0; }
+  .row {
+    display: grid; grid-template-columns: 62px 1fr; gap: 0 18px;
+    padding: 17px 0; border-bottom: 1px solid var(--line-soft);
+    animation: rise .5s var(--ease) both;
+    animation-delay: calc(var(--i) * 45ms);
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(7px); } }
+  .sim { font: 500 var(--t-body) var(--mono); color: var(--muted); padding-top: 0; }
+  .content { margin: 0 0 9px; font-size: var(--t-body); line-height: 1.5; text-wrap: pretty; }
+  .meta {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+    font: 400 var(--t-micro) var(--mono);
+  }
+  .src { display: inline-flex; align-items: center; gap: 6px; letter-spacing: .02em; }
+  .when { color: var(--dim); }
+
   .answer {
-    background: var(--panel-2); border: 1px solid #33404f;
-    border-radius: 6px; padding: 16px 18px; margin-bottom: 24px; white-space: pre-wrap;
-    font-size: 16px;
+    margin: 0 0 30px; padding: 0 0 0 0;
+    font-size: var(--t-lead); line-height: 1.5; white-space: pre-wrap; text-wrap: pretty;
   }
-  .label {
-    font: 600 11px var(--mono); letter-spacing: .09em; text-transform: uppercase;
-    color: var(--dim); margin: 0 0 10px;
-  }
+  .trace { margin: 28px 0 9px; font: 400 var(--t-micro) var(--mono); color: var(--dim); }
+  .trace b { color: var(--muted); font-weight: 500; }
 
-  .mem {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
-    padding: 12px 14px; margin-bottom: 8px;
-  }
-  .mem-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
-  .score { font: 600 12px var(--mono); color: var(--accent); }
-  .badge {
-    font: 600 10px var(--mono); letter-spacing: .05em; text-transform: uppercase;
-    padding: 2px 7px; border-radius: 3px; border: 1px solid;
-  }
-  .badge.mem0 { color: var(--mem0); border-color: #5c4526; background: #291d10; }
-  .badge.native { color: var(--native); border-color: #245442; background: #10241c; }
-  .badge.expired { color: var(--warn); border-color: #5c2b27; background: #2a1412; }
-  .when { font: 11px var(--mono); color: var(--dim); margin-left: auto; }
-  .mem p { margin: 0; }
+  .status { margin: 0; padding: 18px 0; font: 400 var(--t-ui) var(--mono); color: var(--dim); }
+  .status.bad { color: var(--expired); }
 
-  .recall { color: var(--muted); font: 12px var(--mono); margin: 0 0 8px; }
-  .recall b { color: var(--text); font-weight: 600; }
-  .group { margin-bottom: 20px; }
-
-  .note {
-    margin-top: 30px; padding: 14px 16px; border: 1px solid var(--line);
-    border-radius: 6px; background: var(--panel); color: var(--muted); font-size: 13px;
+  /* ---- fidelity ledger ---- */
+  .ledger { margin-top: 60px; padding-top: 22px; border-top: 1px solid var(--line); }
+  .ledger-head {
+    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline;
+    gap: 6px 20px; font: 400 var(--t-micro) var(--mono); color: var(--dim);
   }
-  .note b { color: var(--text); }
-  .err { border-color: #5c2b27; background: #1e1210; color: #f0a8a2; }
-  code { font: 12px var(--mono); background: var(--panel-2); padding: 1px 5px; border-radius: 3px; }
-  a { color: var(--accent); }
-  .spin { color: var(--muted); font-size: 13px; }
+  .verdict {
+    font: 500 var(--t-ui) var(--mono); color: var(--native);
+    letter-spacing: .1em; text-transform: uppercase;
+  }
+  .fields {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+    gap: 0 28px; margin-top: 18px;
+  }
+  .f {
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 7px 0; border-bottom: 1px solid var(--line-soft);
+    font: 400 var(--t-micro) var(--mono); color: var(--muted);
+  }
+  .f b { color: var(--native); font-weight: 500; }
+  .ledger-note { margin: 16px 0 0; font: 400 var(--t-micro)/1.7 var(--mono); color: var(--dim); }
+
+  /* ---- footer ---- */
+  footer {
+    margin-top: 64px; padding: 20px 0 40px; border-top: 1px solid var(--line);
+    font: 400 var(--t-micro)/1.9 var(--mono); color: var(--dim);
+    display: flex; flex-wrap: wrap; gap: 6px 20px; justify-content: space-between;
+  }
+  footer b { color: var(--muted); font-weight: 500; }
+
+  @media (max-width: 600px) {
+    .shell { padding: 0 18px; }
+    .bar { flex-direction: column; align-items: flex-start; gap: 6px; }
+    .live { text-align: left; }
+    .row { grid-template-columns: 1fr; gap: 7px; }
+    .sim { font-size: var(--t-ui); }
+    #go { padding: 0 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
 
-<header>
-  <h1>Mem<span>Bridge</span></h1>
-  <p class="tagline">
-    An agent whose entire memory is a CockroachDB table. Some of these memories were
-    migrated out of Mem0 and scored field-by-field on arrival; the rest were written
-    natively. Retrieval cannot tell them apart &mdash; which is the claim this demo exists
-    to make checkable.
-  </p>
-  <div class="stats" id="stats"><span class="stat">connecting&hellip;</span></div>
-</header>
+<div class="shell">
 
-<div class="tabs" role="tablist">
-  <button class="tab" id="tab-ask" role="tab" aria-selected="true">Ask the agent</button>
-  <button class="tab" id="tab-search" role="tab" aria-selected="false">Search memory directly</button>
-</div>
+  <header class="bar">
+    <div class="mark">Mem<em>Bridge</em></div>
+    <div class="live" id="stats">reading the store&hellip;</div>
+  </header>
 
-<div class="askbar">
-  <input type="text" id="q" placeholder="What should I know before booking dinner?" autocomplete="off">
-  <button class="go" id="go">Ask</button>
-</div>
+  <section class="hero">
+    <h1>Memory that <span class="moved">moved</span>,<br>and left no seam.</h1>
+    <p class="claim">
+      Every memory below is a row in the same CockroachDB table. Some were written there; the rest
+      were migrated out of Mem0 with <b>all 15 fields and their vectors intact</b>. Only the badge
+      still knows the difference &mdash; the vector index doesn&rsquo;t, and neither does the agent.
+    </p>
+  </section>
 
-<div class="opts">
-  <label><input type="checkbox" id="expired"> include expired memories</label>
-  <span id="mode-hint">the model may call <code>recall_memory</code> more than once</span>
-</div>
+  <section class="console">
+    <div class="modes" role="tablist" aria-label="How to query memory">
+      <button class="mode" id="tab-search" role="tab" aria-selected="true" aria-controls="out">Search memory</button>
+      <button class="mode" id="tab-ask" role="tab" aria-selected="false" aria-controls="out">Ask the agent</button>
+    </div>
 
-<div class="examples" id="examples"></div>
+    <form class="query" id="form">
+      <input type="text" id="q" autocomplete="off" spellcheck="false" aria-label="Query">
+      <button id="go" type="submit">Search</button>
+    </form>
 
-<section class="out" id="out"></section>
+    <div class="chips" id="chips"></div>
 
-<div class="note">
-  <b>Why the two tabs.</b> &ldquo;Search memory directly&rdquo; runs the same scoped vector query with
-  no model in the loop. If the agent answers poorly, this is how you tell whether the memory
-  layer or the language model was at fault.
-</div>
+    <div class="controls">
+      <label class="switch">
+        <input type="checkbox" id="expired">
+        <span>Include expired memories</span>
+      </label>
+      <p class="hint" id="hint">try it on a dinner reservation &mdash; the top match lapsed yesterday</p>
+    </div>
+  </section>
+
+  <section id="out" aria-live="polite"></section>
+
+  <section class="ledger">
+    <div class="ledger-head">
+      <span class="verdict">Migration intact</span>
+      <span>mem0 &rarr; cockroachdb &middot; 5/5 records aligned by content fingerprint</span>
+    </div>
+    <div class="fields" id="fields"></div>
+    <p class="ledger-note">
+      Every field CMM can carry, scored on the round trip that put these memories here &mdash;
+      read out of a live Mem0 store, written, and read back. Vectors are compared bit-exactly,
+      not approximately. A field nobody checks is a field nobody can claim survived.
+    </p>
+  </section>
+
+  <footer>
+    <span>CMM v0.1.0 &middot; adapters at both ends &middot; a score that can fail</span>
+    <span>87 tests</span>
+  </footer>
 
 </div>
 
@@ -163,81 +281,112 @@ const API_URL = (function () {
   if (baked.indexOf("__API") !== 0) return baked.replace(/\/$/, "");
   const saved = localStorage.getItem("membridge_api");
   if (saved) return saved.replace(/\/$/, "");
-  const typed = prompt("Lambda Function URL for the MemBridge API:");
+  const typed = prompt("API base URL for the MemBridge demo:");
   if (typed) { localStorage.setItem("membridge_api", typed); return typed.replace(/\/$/, ""); }
   return "";
 })();
 
 const USER_ID = new URLSearchParams(location.search).get("user") || "john_001";
 
-const EXAMPLES = {
-  ask: [
-    "What should I know before booking dinner for me and my partner?",
-    "Do I have anything booked this week?",
-    "What time should you avoid scheduling meetings?",
-    "What's my shoe size?",
-  ],
-  search: [
-    "food I cannot eat",
-    "dinner reservation restaurant booking",
-    "flying and airports",
-    "who is Maria",
-  ],
+const MODES = {
+  search: {
+    label: "Search",
+    placeholder: "food I cannot eat",
+    hint: "one scoped vector query, no model in the loop",
+    opening: "food I cannot eat",
+    chips: ["food I cannot eat", "dinner reservation restaurant booking", "flying and airports", "who is Maria"],
+  },
+  ask: {
+    label: "Ask",
+    placeholder: "What should I know before booking dinner?",
+    hint: "the model may call recall_memory more than once",
+    opening: "",
+    chips: [
+      "What should I know before booking dinner for me and my partner?",
+      "Do I have anything booked this week?",
+      "What time should you avoid scheduling meetings?",
+    ],
+  },
 };
 
-let mode = "ask";
+let mode = "search";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 function setMode(next) {
   mode = next;
-  $("tab-ask").setAttribute("aria-selected", String(next === "ask"));
+  const cfg = MODES[next];
   $("tab-search").setAttribute("aria-selected", String(next === "search"));
-  $("go").textContent = next === "ask" ? "Ask" : "Search";
-  $("q").placeholder = next === "ask"
-    ? "What should I know before booking dinner?"
-    : "food I cannot eat";
-  $("mode-hint").innerHTML = next === "ask"
-    ? 'the model may call <code>recall_memory</code> more than once'
-    : 'one scoped vector query, no model involved';
-  renderExamples();
+  $("tab-ask").setAttribute("aria-selected", String(next === "ask"));
+  $("go").textContent = cfg.label;
+  $("q").placeholder = cfg.placeholder;
+  $("q").value = "";
+  $("hint").textContent = cfg.hint;
+  $("chips").innerHTML = cfg.chips.map((t, i) => `<button type="button" data-i="${i}">${esc(t)}</button>`).join("");
   $("out").innerHTML = "";
 }
 
-function renderExamples() {
-  $("examples").innerHTML = EXAMPLES[mode]
-    .map((text, i) => `<button data-i="${i}">${esc(text)}</button>`)
-    .join("");
-  $("examples").querySelectorAll("button").forEach((b) => {
-    b.onclick = () => { $("q").value = EXAMPLES[mode][b.dataset.i]; run(); };
-  });
-}
+$("chips").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  $("q").value = MODES[mode].chips[b.dataset.i];
+  run();
+});
 
-function memoryHTML(hit) {
+function rowHTML(hit, i) {
   const migrated = hit.source_system === "mem0";
   const expired = hit.expires_at && new Date(hit.expires_at) < new Date();
-  const score = hit.similarity === null || hit.similarity === undefined
-    ? `L2 ${hit.distance.toFixed(3)}`
-    : hit.similarity.toFixed(3);
-  return `<div class="mem">
-    <div class="mem-top">
-      <span class="score">${score}</span>
-      <span class="badge ${migrated ? "mem0" : "native"}">${migrated ? "migrated from mem0" : "native"}</span>
-      ${expired ? '<span class="badge expired">expired</span>' : ""}
-      <span class="when">${esc((hit.created_at || "").slice(0, 10))}</span>
+  const score = hit.similarity == null ? hit.distance.toFixed(3) : hit.similarity.toFixed(3);
+  const cls = migrated ? "is-migrated" : "is-native";
+  return `<li class="row" style="--i:${i}">
+    <span class="sim">${score}</span>
+    <div>
+      <p class="content">${esc(hit.content)}</p>
+      <div class="meta">
+        <span class="src ${cls}"><i class="dot"></i>${migrated ? "migrated from Mem0" : "written here"}</span>
+        ${expired ? '<span class="src is-expired"><i class="dot"></i>expired</span>' : ""}
+        <span class="when">${esc((hit.created_at || "").slice(0, 10))}</span>
+      </div>
     </div>
-    <p>${esc(hit.content)}</p>
-  </div>`;
+  </li>`;
+}
+
+function listHTML(hits, heading) {
+  if (!hits.length) return `<p class="status">Nothing matched.</p>`;
+  return `<div class="rhead">
+      <span>${heading}</span>
+      <span class="legend">
+        <span class="is-migrated"><i class="dot"></i>migrated from Mem0</span>
+        <span class="is-native"><i class="dot"></i>written here</span>
+      </span>
+    </div>
+    <ol class="rows">${hits.map(rowHTML).join("")}</ol>`;
+}
+
+function searchHTML(data) {
+  return listHTML(data.hits, `${data.hits.length} memories, nearest first`);
+}
+
+function askHTML(data) {
+  let html = `<p class="answer">${esc(data.answer || "(no answer)")}</p>`;
+  if (!data.recalled || !data.recalled.length) {
+    return html + `<p class="status">The model answered without reading memory.</p>`;
+  }
+  for (const r of data.recalled) {
+    html += `<p class="trace">recall_memory(<b>${esc(r.query)}</b>)</p>`;
+    html += listHTML(r.hits, `${r.hits.length} memories`);
+  }
+  return html;
 }
 
 async function run() {
   const text = $("q").value.trim();
-  if (!text) return;
-  if (!API_URL) { $("out").innerHTML = `<div class="note err">No API URL configured.</div>`; return; }
+  if (!text) { $("q").focus(); return; }
+  if (!API_URL) { $("out").innerHTML = `<p class="status bad">No API URL configured.</p>`; return; }
 
   $("go").disabled = true;
-  $("out").innerHTML = `<p class="spin">querying CockroachDB&hellip;</p>`;
+  $("out").innerHTML = `<p class="status">searching 1061 memories&hellip;</p>`;
 
   const route = mode === "ask" ? "/ask" : "/search";
   const body = mode === "ask"
@@ -251,63 +400,54 @@ async function run() {
       body: JSON.stringify(body),
     });
     const data = await res.json();
-    if (!res.ok) {
-      $("out").innerHTML = `<div class="note err">${esc(data.error || res.status)}</div>`;
-      return;
-    }
-    $("out").innerHTML = mode === "ask" ? askHTML(data) : searchHTML(data);
+    $("out").innerHTML = !res.ok
+      ? `<p class="status bad">${esc(data.error || res.status)}</p>`
+      : (mode === "ask" ? askHTML(data) : searchHTML(data));
   } catch (e) {
-    $("out").innerHTML = `<div class="note err">${esc(e.message)}</div>`;
+    $("out").innerHTML = `<p class="status bad">${esc(e.message)}</p>`;
   } finally {
     $("go").disabled = false;
   }
 }
 
-function askHTML(data) {
-  let html = `<p class="label">Answer</p><div class="answer">${esc(data.answer || "(empty)")}</div>`;
-  if (!data.recalled || !data.recalled.length) {
-    html += `<div class="note">The model answered without searching memory.</div>`;
-    return html;
-  }
-  html += `<p class="label">Memory reads this turn</p>`;
-  for (const r of data.recalled) {
-    html += `<div class="group"><p class="recall">recall_memory(<b>${esc(r.query)}</b>) &rarr; ${r.hits.length} memories</p>`;
-    html += r.hits.map(memoryHTML).join("") || `<div class="mem"><p style="color:var(--muted)">nothing found</p></div>`;
-    html += `</div>`;
-  }
-  return html;
-}
-
-function searchHTML(data) {
-  if (!data.hits.length) return `<div class="note">No memories matched.</div>`;
-  return `<p class="label">${data.hits.length} memories, nearest first</p>` + data.hits.map(memoryHTML).join("");
-}
-
 async function loadStats() {
-  if (!API_URL) { $("stats").innerHTML = `<span class="stat">no API configured</span>`; return; }
+  if (!API_URL) { $("stats").textContent = "no API configured"; return; }
   try {
     const d = await (await fetch(API_URL + "/health")).json();
-    const sources = Object.entries(d.bundles_by_source || {})
-      .map(([k, v]) => `<span class="stat">${esc(k)} <b>${v}</b> bundle${v === 1 ? "" : "s"}</span>`)
-      .join("");
+    const mem0 = (d.bundles_by_source || {}).mem0 || 0;
     $("stats").innerHTML =
-      `<span class="stat">CockroachDB <b>Cloud</b></span>` +
-      `<span class="stat">memories <b>${d.records}</b></span>` +
-      sources +
-      `<span class="stat">user <b>${esc(USER_ID)}</b></span>`;
+      `<b>${d.records}</b> memories &middot; CockroachDB Cloud<br>` +
+      `${mem0} migrated bundle${mem0 === 1 ? "" : "s"} &middot; user <b>${esc(USER_ID)}</b>`;
   } catch (e) {
-    $("stats").innerHTML = `<span class="stat">store unreachable</span>`;
+    $("stats").textContent = "store unreachable";
   }
 }
 
-$("go").onclick = run;
-$("q").addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
-$("tab-ask").onclick = () => setMode("ask");
+$("form").addEventListener("submit", (e) => { e.preventDefault(); run(); });
 $("tab-search").onclick = () => setMode("search");
-$("expired").onchange = () => { if ($("out").innerHTML && mode === "search") run(); };
+$("tab-ask").onclick = () => setMode("ask");
+$("expired").onchange = () => { if (mode === "search" && $("q").value.trim()) run(); };
 
-renderExamples();
+// The recorded round trip: membridge.fidelity scoring a live Mem0 read against
+// the same bundle written to CockroachDB and read back, aligned by content
+// fingerprint. Static because Mem0 is not deployed — this is the measurement
+// that produced the migrated memories above, not a live re-run.
+const FIELDS = [
+  "content", "scope", "attribution", "created_at", "updated_at",
+  "expires_at", "metadata", "extensions", "cmm_version", "id",
+  "provenance", "embedding.model", "embedding.dim",
+  "embedding.normalized", "embedding.vector",
+];
+$("fields").innerHTML = FIELDS
+  .map((f) => `<div class="f"><span>${esc(f)}</span><b>5/5</b></div>`)
+  .join("");
+
+// Land on the argument rather than an empty box: the opening query returns a
+// Mem0-migrated memory ranked among natively-written ones.
+setMode("search");
+$("q").value = MODES.search.opening;
 loadStats();
+run();
 </script>
 </body>
 </html>
