@@ -9,3 +9,7 @@ __pycache__/
 artifacts/*.json
 !artifacts/.gitkeep
 build/
+
+# local assistant context, not part of the project
+CLAUDE.md
+.claude/
