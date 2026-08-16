@@ -17,7 +17,7 @@ can interrogate rather than take on trust.
 
 First real target pair: **Mem0 → CockroachDB**.
 
-**Live demo:** http://membridge-demo-587104705068.s3-website-us-east-1.amazonaws.com
+**Live demo:** https://membridge-demo-587104705068.s3.us-east-1.amazonaws.com/index.html
 **API:** https://mz86k14151.execute-api.us-east-1.amazonaws.com — try
 `curl -s https://mz86k14151.execute-api.us-east-1.amazonaws.com/health`
 
