@@ -1,0 +1,258 @@
+# MemBridge
+
+**Migrating agent memory between stores without lying about what survived.**
+
+An agent's memory is the one part of it you cannot regenerate. Prompts can be
+rewritten and models swapped, but the accumulated record of a user — their
+allergies, their preferences, what they told you last March — exists in exactly
+one place, and moving it between vendors is a one-way door. "We migrated your
+memories" is an unfalsifiable claim unless somebody measures what actually
+arrived.
+
+MemBridge reads a source memory store into a vendor-neutral **Common Memory
+Model (CMM)**, writes it to CockroachDB, and **scores the round trip
+field-by-field**. Then it runs an agent whose entire memory is that CockroachDB
+table — no history buffer, no cache — so the migration's result is something you
+can interrogate rather than take on trust.
+
+First real target pair: **Mem0 → CockroachDB**.
+
+```
+Mem0 (Qdrant + local LLM)  ──read──▶  CMM  ──write──▶  CockroachDB Cloud
+                                       │                    │
+                                       └──── score ─────────┘
+                                     15 fields, per record
+
+                       AWS Lambda ──vector search──▶ CockroachDB Cloud
+                            ▲                          (us-east-1)
+                            │
+                    S3 static demo site
+```
+
+---
+
+## The result
+
+Migrating the ground-truth Mem0 store into CockroachDB Cloud:
+
+```
+FIDELITY  mem0 -> cockroachdb
+source records       : 5      aligned (fingerprint): 5
+missing in target    : 0      unexpected in target : 0
+
+content 5/5   scope 5/5   attribution 5/5   created_at 5/5   updated_at 5/5
+expires_at 5/5   metadata 5/5   extensions 5/5   cmm_version 5/5   id 5/5
+provenance 5/5   embedding.model 5/5   embedding.dim 5/5
+embedding.normalized 5/5   embedding.vector 5/5
+
+vectors are compared bit-exactly, not approximately
+MIGRATION INTACT
+```
+
+Reported per field rather than as one percentage on purpose. "97% migrated"
+hides *which* 3%, and whether the lost part was content or timestamps matters
+enormously.
+
+Then, against the migrated store — note the third result:
+
+```
+$ membridge search "what food can I not eat" --user-id john_001
+1. sim 0.5866  I cannot eat shrimp, crab, lobster or anything cooked in the same fryer.
+2. sim 0.5054  Maria does not eat meat or fish, but she does eat eggs and dairy.
+3. sim 0.3151  My name is John and I am allergic to shellfish.      ← migrated from Mem0
+```
+
+The agent cannot tell which of its memories were migrated. That is the point: a
+memory layer that treats migrated records as second-class has not really
+migrated them.
+
+---
+
+## Which tools, and what each one does
+
+### CockroachDB (3 of the 4 listed tools)
+
+| Tool | What it actually does here |
+|---|---|
+| **Distributed Vector Indexing** | `memory_record_embedding_idx` is a CSPANN index on `VECTOR(384)`, partitioned by `scope_user_id`. Every memory read the agent makes goes through it. Confirmed used rather than assumed — `EXPLAIN` on a scoped query reports `• vector search … prefix spans: [/'john_001' - /'john_001']`, and the same query unscoped reports `FULL SCAN`. |
+| **ccloud CLI (agent-ready)** | Provisioned the whole target: cluster, SQL user, database. The demo cluster was created and configured entirely from the CLI, which is what let this be scripted rather than clicked. |
+| **CockroachDB as the memory layer** | Not a cache in front of something else. `membridge/agent/memory_agent.py` holds no conversational state at all — every fact in every answer was retrieved from CockroachDB during the turn it was used in. Restart the process and the agent knows exactly as much as before. |
+
+CockroachDB is also doing schema-level work that a vector store cannot: the CMM
+invariants are enforced as `CHECK`, `UNIQUE` and composite `FOREIGN KEY`
+constraints, so the target physically cannot hold a record CMM would have
+rejected. `sql/verify_constraints.sql` is the falsifier — 14 cases asserting each
+constraint rejects what it claims to. All 14 verified on CockroachDB **v26.2.5**
+(Cloud) and **v25.4.0** (local).
+
+### AWS (2 services)
+
+| Service | What it actually does here |
+|---|---|
+| **AWS Lambda** | Runs the agent and the retrieval API behind a Function URL. Holds the ONNX encoder and the database connection across warm invocations, and holds nothing about the user between requests — the zero-persistence constraint is enforced at the deployment boundary, not just in a docstring. |
+| **Amazon S3** | Serves the static demo site, and stores the 90MB MiniLM ONNX model that Lambda pulls into `/tmp` on cold start. Keeping the model out of the deployment package is what keeps a code update a ~40MB upload instead of a ~130MB one. |
+
+Both in `us-east-1`, the same region as the cluster: the agent makes several
+scoped vector queries per answer, so a cross-region hop would be paid repeatedly
+per request rather than once.
+
+---
+
+## What makes this different from a RAG demo
+
+Most agent-memory demos are unfalsifiable in the same way "we migrated your
+memories" is. These are the specific places MemBridge refuses to be:
+
+- **Fidelity is scored, not asserted.** `membridge/fidelity/` aligns source and
+  target records by a content fingerprint that depends on nothing a migration
+  may legitimately change — not the id, not the timestamps, not the vendor's own
+  hash — then compares all 15 fields with partial credit and a loss ledger.
+
+- **Vectors are compared bit-exactly.** CockroachDB's `VECTOR` is float32 and
+  prints nine significant digits; parsed as a float64 that string is a
+  *different number*. All 384 source components were float32-exact and **zero**
+  of the naively-returned ones were, so a comparison written without knowing
+  this reports total embedding loss on a flawless migration. `decode_vector`
+  rounds back through float32 and recovers the stored value exactly.
+
+- **Similarity scores are refused rather than faked.** Cosine between vectors
+  from different embedders is a meaningless number that still sorts, so
+  `Embedding` carries its model name and a query from the wrong space raises.
+  CockroachDB only index-accelerates L2, and L2 ranks identically to cosine
+  *only for unit-length vectors* — so `embedding_normalized` is a column, NULL
+  means "not checked", and a hit from an unverified space gets `similarity=None`
+  rather than a converted number that would be wrong.
+
+- **Expired memories are handled as a decision, not a default.** Mem0's
+  `get_all()` silently drops expired records, which is backwards for a
+  migration — an expired memory is still data the source holds. MemBridge always
+  reads them, and makes hiding them something a *retrieval* caller asks for by
+  name. In the demo, the highest-similarity memory for "dinner plans" is a
+  reservation that lapsed two days ago, and it is correctly withheld.
+
+- **Vendor data that CMM does not model is preserved, namespaced, verbatim.**
+  A test asserts every field Mem0 can emit has a declared destination; add a
+  field to Mem0's output and it fails.
+
+Every vendor behaviour above was found by reading the installed source, not the
+documentation. Several contradict what the documentation implies.
+
+---
+
+## Running it
+
+Python 3.11 and [uv](https://docs.astral.sh/uv/).
+
+```bash
+git clone <this repo> && cd membridge
+uv sync
+```
+
+### 1. Point at a CockroachDB target
+
+```bash
+ccloud cluster create membridge --plan basic          # or use an existing one
+ccloud cluster user create membridge membridge -p '<password>'
+ccloud cluster database create membridge membridge
+ccloud cluster sql membridge --connection-url --database membridge -u membridge
+```
+
+Put the connection string in `.env`:
+
+```
+MEMBRIDGE_COCKROACH_DSN=postgresql://membridge:<password>@<host>:26257/membridge?sslmode=verify-full
+GROQ_API_KEY=<from console.groq.com/keys>
+```
+
+> CockroachDB Cloud serves a Let's Encrypt certificate, but `sslmode=verify-full`
+> makes libpq look in `~/.postgresql/root.crt` and OpenSSL's trust store may not
+> carry ISRG Root X1. If the connection fails on certificate verification:
+> `curl --create-dirs -o ~/.postgresql/root.crt https://cockroachlabs.cloud/clusters/<cluster-id>/cert`
+
+Then:
+
+```bash
+uv run membridge schema --apply       # creates the tables; never implicit
+```
+
+### 2. Migrate, and score it
+
+```bash
+uv run python scripts/dump_mem0_multiactor.py         # regenerate ground truth
+
+uv run membridge migrate \
+    --qdrant ./data/qdrant_multiactor \
+    --collection membridge_mem0_multiactor \
+    --user-id john_001 --agent-id support_agent_v2 --run-id thread_8891
+```
+
+Exits non-zero if anything was lost, so it is usable in a pipeline that should
+stop when a migration silently drops something.
+
+### 3. Seed the demo corpus
+
+```bash
+uv run python scripts/seed_demo.py --replace
+```
+
+The bulk records exist for the query planner, not the demo: CockroachDB only
+chooses the vector index once statistics say the table is worth an index scan,
+so a store holding five records answers every search with a full scan and proves
+nothing.
+
+### 4. Query it
+
+```bash
+uv run membridge search "what food can I not eat" --user-id john_001
+uv run membridge search "dinner plans" --user-id john_001 --include-expired
+uv run membridge ask "What should I know before booking dinner?" --user-id john_001
+uv run membridge bundles
+```
+
+### 5. Deploy the demo
+
+```bash
+aws configure
+./scripts/deploy_aws.sh
+```
+
+Idempotent; run it again to push new code. It prints the site URL and the API
+URL. Note that it makes one S3 bucket publicly readable — a demo URL has to be
+reachable without credentials. The DSN and the API key are set only as Lambda
+environment variables; they are never in the bucket and never in the page.
+
+---
+
+## Layout
+
+```
+membridge/cmm/            the Common Memory Model — schema v0.1.0
+membridge/adapters/mem0/  read a live Mem0 instance, or a recorded dump
+membridge/adapters/cockroach/  write and read CMM, plus scoped vector search
+membridge/fidelity/       score a round trip: alignment, per-field, loss ledger
+membridge/embed/          MiniLM/384 query encoder via onnxruntime (no torch)
+membridge/agent/          the agent, and a dependency-free chat client
+membridge/serve/          the Lambda handler
+membridge/cli/            typer front end over all of it
+sql/schema.sql            CMM mapped onto CockroachDB
+sql/verify_constraints.sql  14 cases proving each constraint bites
+scripts/                  ground-truth dumps, round trip, seed, deploy
+web/index.html            the demo page
+```
+
+`CLAUDE.md` is the engineering log: every design decision, every vendor finding,
+and the open questions that are still open. It is more honest than this README
+and considerably longer.
+
+## Tests
+
+```bash
+uv run pytest tests/ -q       # 87 passed, 12 skipped
+```
+
+The 12 skips need a live CockroachDB and skip cleanly without one. A skipped
+test says so; a mocked database would have confirmed the wrong behaviour.
+
+## License
+
+MIT.

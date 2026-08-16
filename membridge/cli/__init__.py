@@ -22,6 +22,22 @@ app = typer.Typer(
 )
 
 
+@app.callback()
+def _load_env() -> None:
+    """Read `.env` before any command runs.
+
+    Every credential this tool needs -- the CockroachDB DSN, the LLM key -- is
+    read from the environment, and a DSN carries a password, so the one place it
+    should not be is a shell history or a command line. `override=False` because
+    an explicitly exported variable is a deliberate act and a file on disk is a
+    default; the reverse would make `MEMBRIDGE_COCKROACH_DSN=... membridge ...`
+    silently target the wrong database.
+    """
+    from dotenv import load_dotenv
+
+    load_dotenv(override=False)
+
+
 def _err(message: str) -> None:
     typer.secho(message, fg=typer.colors.RED, err=True)
 
