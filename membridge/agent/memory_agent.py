@@ -65,7 +65,15 @@ RECALL_TOOL: dict[str, Any] = {
                     ),
                 },
                 "limit": {
-                    "type": "integer",
+                    # Both types, deliberately. Groq validates tool arguments
+                    # against this schema *server-side* and returns a hard 400
+                    # when they disagree -- and llama routinely emits numeric
+                    # arguments as strings (`"limit": "5"`). Declaring only
+                    # `integer` turns a well-known model quirk into a failed
+                    # request that never reaches `_run_tool`, which coerces it
+                    # perfectly well. Better to accept what the model actually
+                    # sends than to be right about JSON types and get a 400.
+                    "type": ["integer", "string"],
                     "description": "How many memories to return (default 5, max 20).",
                 },
             },

@@ -41,6 +41,13 @@ PROVIDERS: dict[str, tuple[str, str, str]] = {
 DEFAULT_PROVIDER = "groq"
 DEFAULT_TIMEOUT = 30.0
 
+#: Sent on every request, and not optional. Groq sits behind Cloudflare, which
+#: rejects urllib's default `Python-urllib/3.11` with **403 error code 1010** --
+#: a bot-protection response that looks exactly like a rejected API key and is
+#: not one. Any identifiable UA gets through. Worth knowing before debugging a
+#: perfectly valid key for an hour.
+USER_AGENT = "membridge/0.1 (+https://github.com/membridge)"
+
 
 class LLMUnavailable(RuntimeError):
     """Raised when the model cannot be reached or is not configured.
@@ -122,6 +129,7 @@ class ChatClient:
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
             },
             method="POST",
         )
