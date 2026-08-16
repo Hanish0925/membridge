@@ -280,6 +280,12 @@ uv run pytest tests/ -q       # 87 passed, 12 skipped
 The 12 skips need a live CockroachDB and skip cleanly without one. A skipped
 test says so; a mocked database would have confirmed the wrong behaviour.
 
+## Team
+
+- **Pushpak Hanish** — [@Hanish0925](https://github.com/Hanish0925)
+- **Varun Nihar** — [@vNihar007](https://github.com/vNihar007)
+- **Manideep** — [@manideep0921](https://github.com/manideep0921)
+
 ## License
 
 MIT.

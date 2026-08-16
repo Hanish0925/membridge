@@ -2,6 +2,14 @@
 name = "membridge"
 version = "0.1.0"
 requires-python = ">=3.11"
+# GitHub noreply addresses rather than personal inboxes. They are the same
+# addresses GitHub's own web editor commits with, so they attribute to the right
+# account without publishing anyone's real email in a public package.
+authors = [
+    { name = "Pushpak Hanish", email = "144831121+Hanish0925@users.noreply.github.com" },
+    { name = "Varun Nihar", email = "145825788+vNihar007@users.noreply.github.com" },
+    { name = "Manideep", email = "143246091+manideep0921@users.noreply.github.com" },
+]
 dependencies = [
     # The CA bundle the CockroachDB DSN points at. Not decoration: libpq's
     # default trust path and `sslrootcert=system` each fail on one of the two
