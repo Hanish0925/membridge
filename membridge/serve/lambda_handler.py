@@ -1,16 +1,23 @@
 """AWS Lambda entry point: the agent, its memory, and nothing else.
 
-Three routes, all POST-or-GET over a Lambda Function URL:
+Four routes, all POST-or-GET over a Lambda Function URL:
 
-    GET  /health   what this container is holding, and whether the store answers
-    POST /search   scoped vector search, no model involved
-    POST /ask      the agent: recall, then answer, with the recalls returned
+    GET  /health     what this container is holding, and whether the store answers
+    POST /search     scoped vector search, no model involved
+    POST /ask        the agent: recall, then answer, with the recalls returned
+    POST /fidelity   score the live migrated bundle, optionally corrupted first
 
 `/search` exists next to `/ask` for the same reason it does in the CLI. If the
 agent gives a poor answer, the interesting question is whether the memory layer
 or the model was at fault, and a route that takes the LLM out answers it
 directly. A demo that only exposes `/ask` cannot distinguish "retrieved nothing"
 from "retrieved the right thing and phrased it badly".
+
+`/fidelity` exists because a static ledger of `5/5` everywhere is
+indistinguishable from a scorer that always says so. It runs the real
+`membridge.fidelity.score` against whatever is in CockroachDB right now, and
+can apply one named, honestly-labelled corruption first -- see
+`membridge.fidelity.demo` for what each one actually does and why.
 
 **What is held across invocations, and why.** Lambda reuses a warm container, so
 the two expensive things here are created once at module scope and reused: the
@@ -167,6 +174,7 @@ def _route(event: dict[str, Any]) -> tuple[str, str]:
 
 def _hit_json(hit: Any) -> dict[str, Any]:
     record = hit.record
+    mem0_extensions = record.extensions.get("mem0", {})
     return {
         "content": record.content,
         "similarity": hit.similarity,
@@ -178,6 +186,19 @@ def _hit_json(hit: Any) -> dict[str, Any]:
         # memory was migrated out of Mem0 or written natively, and the demo's
         # claim is that retrieval cannot tell the difference.
         "source_system": record.provenance.source_system,
+        # CMM's scope is user_id/agent_id/session_id/app_id, not just user_id --
+        # the migrated records already carry agent_id and session_id (Mem0's
+        # run_id), because the fixture that produced them
+        # (dump_mem0_multiactor.py) scoped by all three. Omitted when absent so
+        # a single-user native record does not grow three empty fields.
+        "agent_id": record.scope.agent_id,
+        "session_id": record.scope.session_id,
+        # `role`/`actor_id` are Mem0's multi-actor attribution, only ever
+        # written by the infer=False path -- see the mutually-exclusive
+        # attribution finding in CLAUDE.md. Read from extensions rather than a
+        # CMM field because CMM has nowhere else to put them.
+        "actor_id": mem0_extensions.get("actor_id"),
+        "role": mem0_extensions.get("role"),
     }
 
 
@@ -222,7 +243,125 @@ def _search(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     return 200, {"query": query, "user_id": user_id, "hits": [_hit_json(h) for h in hits]}
 
 
-def _ask(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+#: Seconds held back from the agent's budget so that a degraded answer can
+#: still be assembled and returned. The fallback search is an embed plus one
+#: scoped query; the rest is JSON. Generous on purpose -- overrunning here means
+#: Lambda kills the function and the caller gets nothing at all, which is the
+#: one outcome worse than "the model was unreachable".
+REPLY_RESERVE_SECONDS = 8.0
+
+#: Used only when there is no Lambda context to ask, i.e. running this module
+#: locally. In Lambda the real remaining time is always available and better.
+FALLBACK_BUDGET_SECONDS = 40.0
+
+
+def _ask_budget(context: Any) -> float:
+    """How long the agent may run, from the clock that will actually kill it.
+
+    Taken from `get_remaining_time_in_millis` rather than a constant because the
+    two costs ahead of it are wildly variable: a cold start pulls 90MB of ONNX
+    out of S3 before the agent begins, so a budget measured from the start of
+    `ask` can be perfectly reasonable and still overrun the invocation.
+    """
+    remaining = getattr(context, "get_remaining_time_in_millis", None)
+    if remaining is None:
+        return FALLBACK_BUDGET_SECONDS
+    try:
+        return max(1.0, (remaining() / 1000.0) - REPLY_RESERVE_SECONDS)
+    except Exception:
+        return FALLBACK_BUDGET_SECONDS
+
+
+#: One label per mode, shown next to the verdict so a viewer knows what was
+#: simulated without reading code. Kept beside the route rather than in
+#: `membridge.fidelity.demo` because it is prose for this page, not a fact
+#: about the corruption itself.
+_MODE_LABELS = {
+    "intact": "no corruption applied",
+    "drop_expiry": "simulated: one record's expires_at was dropped after the read",
+    "corrupt_vector": "simulated: one record's embedding was corrupted after the read",
+    "simulate_quantization_loss": (
+        "hypothetical: a source vector with more precision than float32 can hold "
+        "(real Mem0 vectors are already float32-exact, so this cannot happen on "
+        "the live data -- it demonstrates what the loss ledger would say if it did)"
+    ),
+}
+
+
+def _field_json(field: Any) -> dict[str, Any]:
+    return {
+        "field": field.field,
+        "aligned": field.aligned,
+        "survived": field.survived,
+        "credit": round(field.credit, 4),
+        "rate": round(field.rate, 4),
+        "partial_rate": round(field.partial_rate, 4),
+        "intact": field.intact,
+        "read_scoped": field.read_scoped,
+    }
+
+
+def _loss_json(loss: Any) -> dict[str, Any]:
+    return {
+        "kind": loss.kind.value,
+        "severity": loss.severity.value,
+        "field": loss.field,
+        "detail": loss.detail,
+    }
+
+
+def _fidelity(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """Score the live migrated bundle, optionally corrupted first.
+
+    The point of this route is that it is not the static ledger baked into the
+    page at deploy time (see `web/index.html`'s recorded round trip, and the
+    reason it stays static: Mem0 is not deployed anywhere this Lambda can reach
+    it). This scores whatever is in CockroachDB *right now*, live, with the
+    real `membridge.fidelity.score` -- the only thing simulated is the
+    corruption itself, named and labelled, never the scoring.
+    """
+    from membridge.adapters.cockroach import CockroachReader
+    from membridge.fidelity import corrupt_vector, drop_expiry, score, simulate_quantization_loss
+
+    mode = body.get("mode") or "intact"
+    if mode not in _MODE_LABELS:
+        return 400, {"error": f"unknown mode {mode!r}; known: {sorted(_MODE_LABELS)}"}
+
+    reader = CockroachReader(connection())
+    bundle_meta = next(
+        (b for b in reader.list_bundles() if b["source_system"] == "mem0"), None
+    )
+    if bundle_meta is None:
+        return 404, {"error": "no mem0-sourced bundle in this store"}
+
+    bundle = reader.read_bundle(bundle_meta["id"])
+
+    if mode == "intact":
+        source, target = bundle, bundle.model_copy(deep=True)
+    elif mode == "drop_expiry":
+        source, target = bundle, drop_expiry(bundle)
+    elif mode == "corrupt_vector":
+        source, target = bundle, corrupt_vector(bundle)
+    else:
+        source, target = simulate_quantization_loss(bundle)
+
+    report = score(source, target, target_system="cockroachdb")
+
+    return 200, {
+        "mode": mode,
+        "mode_label": _MODE_LABELS[mode],
+        "intact": report.intact,
+        "overall": round(report.overall(), 4),
+        "source_records": report.source_records,
+        "target_records": report.target_records,
+        "aligned": report.aligned,
+        "fields": [_field_json(f) for f in report.fields],
+        "losses": [_loss_json(loss) for loss in report.losses],
+        "critical_count": len(report.critical()),
+    }
+
+
+def _ask(body: dict[str, Any], context: Any = None) -> tuple[int, dict[str, Any]]:
     from membridge.adapters.cockroach import CockroachReader
     from membridge.agent import ChatClient, LLMUnavailable, MemoryAgent
 
@@ -234,24 +373,38 @@ def _ask(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     try:
         llm = ChatClient()
     except LLMUnavailable as exc:
+        # Distinct from the model being *unreachable*, which the agent now
+        # absorbs. This one means no key was configured, which is a deployment
+        # mistake on this side rather than a vendor having a bad afternoon --
+        # nothing to degrade to, and nobody but the operator can fix it.
         return 503, {"error": f"model not configured: {exc}"}
 
-    agent = MemoryAgent(CockroachReader(connection()), encoder(), llm)
-    try:
-        answer = agent.ask(question, user_id=user_id)
-    except LLMUnavailable as exc:
-        # Deliberately distinguished from a memory failure. The memory layer
-        # answering while the model is unreachable is not a failure of the thing
-        # this project is about, and the status code says so.
-        return 502, {"error": f"memory was reachable, the model was not: {exc}"}
+    agent = MemoryAgent(
+        CockroachReader(connection()),
+        encoder(),
+        llm,
+        budget_seconds=_ask_budget(context),
+    )
+    answer = agent.ask(question, user_id=user_id)
 
+    # 200 even when degraded, and deliberately: the request succeeded. Memory
+    # was searched, the records came back, and they are in this payload. The
+    # part that failed is named in `failure` rather than replacing the answer
+    # with an error -- a 502 here would report the memory layer as broken on
+    # the one occasion it demonstrably was not.
     return 200, {
         "question": question,
         "user_id": user_id,
         "answer": answer.text,
         "turns": answer.turns,
+        "degraded": answer.degraded,
+        "failure": answer.failure,
         "recalled": [
-            {"query": recall.query, "hits": [_hit_json(h) for h in recall.hits]}
+            {
+                "query": recall.query,
+                "fallback": recall.fallback,
+                "hits": [_hit_json(h) for h in recall.hits],
+            }
             for recall in answer.recalled
         ],
         "memories_used": [_hit_json(h) for h in answer.memories_used],
@@ -270,8 +423,11 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         if path == "/search" and method == "POST":
             status, body = _search(_parse_body(event))
             return _response(status, body)
+        if path == "/fidelity" and method == "POST":
+            status, body = _fidelity(_parse_body(event))
+            return _response(status, body)
         if path == "/ask" and method == "POST":
-            status, body = _ask(_parse_body(event))
+            status, body = _ask(_parse_body(event), context)
             return _response(status, body)
         return _response(404, {"error": f"no route for {method} {path}"})
     except Exception as exc:

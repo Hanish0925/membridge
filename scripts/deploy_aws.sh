@@ -240,7 +240,14 @@ sed "s|__API_URL__|${API_URL%/}|" "${REPO_ROOT}/web/index.html" > "${BUILD}/site
 aws s3 cp "${BUILD}/site/index.html" "s3://${BUCKET}/index.html" \
   --content-type "text/html; charset=utf-8" --cache-control "no-cache" --only-show-errors
 
-SITE_URL="http://${BUCKET}.s3-website-${REGION}.amazonaws.com"
+# The website endpoint (s3-website-<region>) serves HTTP only -- nothing
+# listens on 443, so `https://` to it is a connection failure, not a cert
+# error. Phones try HTTPS first and show a generic "can't connect", which
+# reads as "the site is down" rather than "this endpoint has no TLS" (see
+# CLAUDE.md, Phase 8 finding 1). The REST endpoint serves the same object over
+# real TLS; it needs the explicit /index.html because only the website
+# endpoint does index-document routing.
+SITE_URL="https://${BUCKET}.s3.${REGION}.amazonaws.com/index.html"
 
 say "deployed"
 printf '    demo : %s\n' "${SITE_URL}"

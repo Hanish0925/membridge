@@ -129,7 +129,13 @@ def test_an_unexpected_record_is_reported_because_it_invalidates_the_rates() -> 
 
 
 def test_overall_is_the_worst_field_not_the_average() -> None:
-    """Fourteen intact fields must not be able to hide a destroyed one."""
+    """Fourteen intact fields must not be able to hide a destroyed one.
+
+    `id` is excluded from `rates` here: `_record()`/`_other()` mint a fresh id
+    per call, so its rate is 0.0 by construction and would otherwise be the
+    "worst field" this test is trying to isolate -- see
+    `test_a_fresh_id_never_drags_overall_down` for that behaviour directly.
+    """
     source = _bundle(_record(), _other())
     target = _bundle(
         _record(created_at=NOW - timedelta(days=9)),
@@ -138,9 +144,83 @@ def test_overall_is_the_worst_field_not_the_average() -> None:
 
     report = score(source, target, target_system="cockroachdb")
 
-    rates = [field.rate for field in report.fields]
+    rates = [field.rate for field in report.fields if not field.read_scoped]
     assert report.overall() == min(rates)
     assert report.overall() < sum(rates) / len(rates), "an average would flatter this"
+
+
+# --- read-scoped fields -----------------------------------------------
+
+
+def test_a_fresh_id_never_drags_overall_down() -> None:
+    """Two independent reads of the same store mint two different ids.
+
+    `_record()` defaults `id` via `uuid4()`, so `source` and `target` disagree
+    on it by construction here even though nothing else differs -- this is
+    exactly the shape of comparing a fresh Mem0 read against an older write,
+    which is the Phase 8 near-miss this fix exists to close.
+    """
+    source = _bundle(_record())
+    target = _bundle(_record())  # same content, different fingerprint-excluded id
+
+    report = score(source, target, target_system="cockroachdb")
+
+    id_field = next(f for f in report.fields if f.field == "id")
+    assert id_field.read_scoped is True
+    assert id_field.rate == 0.0, "the ids really did not match, and that is honest"
+    assert id_field.partial_rate == 1.0, "but it earns full credit, not partial"
+    assert report.overall() == 1.0
+    assert report.intact is True
+
+    loss = next(loss for loss in report.losses if loss.field == "id")
+    assert loss.severity is Severity.NOTE
+    assert loss not in report.critical()
+
+
+def test_provenance_exported_at_alone_does_not_break_intact() -> None:
+    """The Phase 8 near-miss, pinned directly.
+
+    Scoring a fresh Mem0 read against an older write reported `provenance` 0/5
+    on a migration that had lost nothing, because every subfield matched except
+    `exported_at` -- which records when each read ran, not what the migration
+    did. This is that exact scenario in miniature.
+    """
+    source = _record()
+    target = source.model_copy(
+        update={
+            "provenance": source.provenance.model_copy(
+                update={"exported_at": NOW + timedelta(hours=5)}
+            )
+        }
+    )
+
+    report = score(_bundle(source), _bundle(target), target_system="cockroachdb")
+
+    provenance_field = next(f for f in report.fields if f.field == "provenance")
+    assert provenance_field.intact is True
+    assert report.intact is True
+
+
+def test_a_genuine_provenance_mismatch_is_still_critical() -> None:
+    """Excluding `exported_at` must not neuter the rest of provenance identity.
+
+    A migration that scrambles `source_id` really has broken lineage, and that
+    is not the read-pass artifact this fix is narrowing around.
+    """
+    source = _record()
+    target = source.model_copy(
+        update={
+            "provenance": source.provenance.model_copy(update={"source_id": "wrong-id"})
+        }
+    )
+
+    report = score(_bundle(source), _bundle(target), target_system="cockroachdb")
+
+    provenance_field = next(f for f in report.fields if f.field == "provenance")
+    assert provenance_field.intact is False
+    assert report.intact is False
+    loss = next(loss for loss in report.losses if loss.field == "provenance")
+    assert loss.severity is Severity.CRITICAL
 
 
 # --- partial credit -------------------------------------------------------

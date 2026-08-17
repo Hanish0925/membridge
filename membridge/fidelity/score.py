@@ -32,6 +32,14 @@ from membridge.fidelity.models import (
 #: report starts truncating.
 MAX_LISTED = 8
 
+#: Field names whose exact-match rate reflects when a read happened rather than
+#: what a migration did, so `overall()` and `intact` must not gate on them. Kept
+#: as a name set rather than a fourth `FieldSpec` element because it is the
+#: `FieldSurvival` this produces that needs the flag, not the spec that produces
+#: it -- a caller passing a custom `fields` list still gets the right behaviour
+#: for `id` without having to know this set exists.
+READ_SCOPED_FIELDS = frozenset({"id"})
+
 
 def _float32(value: float) -> float:
     import struct
@@ -82,6 +90,53 @@ def compare_exact(source: Any, target: Any) -> Comparison:
     return Comparison(
         False, 0.0, detail=f"{source!r} -> {target!r}", severity=Severity.CRITICAL
     )
+
+
+def compare_read_scoped(source: Any, target: Any) -> Comparison:
+    """Exact-match is recorded honestly; a mismatch is never scored as loss.
+
+    For a field whose value reflects *when a read happened* rather than what a
+    migration did, `exact` still reports the true observation (two independent
+    reads mint different ids almost every time), but `credit` stays 1.0 and
+    `severity` is NOTE, because comparing read artifacts across two reads
+    proves nothing about the migration. `FieldSurvival.read_scoped` is the flag
+    that keeps this from also dragging down `overall()` and `intact` -- see the
+    read-pass open question in CLAUDE.md, which this closes.
+    """
+    if source == target:
+        return Comparison(True, 1.0)
+    return Comparison(
+        False,
+        1.0,
+        kind=LossKind.FIELD_CHANGED,
+        severity=Severity.NOTE,
+        detail=(
+            f"{source!r} -> {target!r} (expected: minted fresh per read pass, "
+            "not evidence anything was lost)"
+        ),
+    )
+
+
+def compare_provenance(source: Any, target: Any) -> Comparison:
+    """Provenance identity, with `exported_at` deliberately not part of it.
+
+    Every other subfield -- source_system, source_id, source_version,
+    source_hash, adapter -- describes where a record came from, and a mismatch
+    there is real lineage loss, still CRITICAL via `compare_exact`. `exported_at`
+    records when *this particular read* ran, so two honest reads of the same
+    already-migrated record differ on it every time without anything having
+    changed. Comparing it would report a fresh re-read as a broken migration,
+    which is the exact confusion Phase 8 found when a static ledger was scored
+    against a live re-read: everything matched except `exported_at`, and that
+    was the read, not the migration.
+    """
+    if source is None or target is None:
+        return compare_exact(source, target)
+
+    def _without_read_time(provenance: Any) -> Any:
+        return provenance.model_copy(update={"exported_at": None})
+
+    return compare_exact(_without_read_time(source), _without_read_time(target))
 
 
 def compare_mapping(source: Any, target: Any) -> Comparison:
@@ -191,8 +246,8 @@ DEFAULT_FIELDS: list[FieldSpec] = [
     ("metadata", lambda r: r.metadata, compare_mapping),
     ("extensions", lambda r: r.extensions, compare_mapping),
     ("cmm_version", lambda r: r.cmm_version, compare_exact),
-    ("id", lambda r: r.id, compare_exact),
-    ("provenance", lambda r: r.provenance, compare_exact),
+    ("id", lambda r: r.id, compare_read_scoped),
+    ("provenance", lambda r: r.provenance, compare_provenance),
     ("embedding.model", lambda r: r.embedding.model if r.embedding else None, compare_exact),
     ("embedding.dim", lambda r: r.embedding.dim if r.embedding else None, compare_exact),
     (
@@ -306,6 +361,7 @@ def score(
                 credit=credit,
                 changed=tuple(changed[:MAX_LISTED]),
                 changed_truncated=len(changed) > MAX_LISTED,
+                read_scoped=name in READ_SCOPED_FIELDS,
             )
         )
 

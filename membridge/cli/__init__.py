@@ -234,16 +234,13 @@ def ask(
         raise typer.Exit(2)
 
     agent = MemoryAgent(CockroachReader(conn), default_encoder(), llm)
-    try:
-        answer = agent.ask(question, user_id=user_id)
-    except LLMUnavailable as exc:
-        _err(f"memory was reachable, the model was not: {exc}")
-        raise typer.Exit(3)
+    answer = agent.ask(question, user_id=user_id)
 
     if show_memory:
         for recall in answer.recalled:
+            origin = " [fallback: MemBridge's query, not the model's]" if recall.fallback else ""
             typer.secho(
-                f"  recall({recall.query!r}) -> {len(recall.hits)} memories",
+                f"  recall({recall.query!r}) -> {len(recall.hits)} memories{origin}",
                 fg=typer.colors.BRIGHT_BLACK,
             )
         for hit in answer.memories_used:
@@ -254,6 +251,14 @@ def ask(
         typer.echo("")
 
     typer.echo(answer.text)
+
+    if answer.degraded:
+        # Non-zero, but only after the memories have been printed. A script
+        # needs to know the model was not involved; a human still wants what
+        # the store returned, and exiting before showing it would throw away
+        # the half of the system that worked.
+        _err(f"degraded: {answer.failure}")
+        raise typer.Exit(3)
 
 
 def main() -> None:  # pragma: no cover - entry point

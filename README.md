@@ -21,6 +21,10 @@ First real target pair: **Mem0 → CockroachDB**.
 **API:** https://mz86k14151.execute-api.us-east-1.amazonaws.com — try
 `curl -s https://mz86k14151.execute-api.us-east-1.amazonaws.com/health`
 
+The same memory the web demo queries, from the CLI:
+
+![`membridge ask` recalling scoped memories and answering from them](docs/img/cli-ask.png)
+
 ```
 Mem0 (Qdrant + local LLM)  ──read──▶  CMM  ──write──▶  CockroachDB Cloud
                                        │                    │
@@ -274,7 +278,7 @@ and considerably longer.
 ## Tests
 
 ```bash
-uv run pytest tests/ -q       # 87 passed, 12 skipped
+uv run pytest tests/ -q       # 107 passed, 12 skipped
 ```
 
 The 12 skips need a live CockroachDB and skip cleanly without one. A skipped

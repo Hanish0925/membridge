@@ -1,277 +1,275 @@
 <!doctype html>
-<html lang="en">
+<html class="dark" lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MemBridge — memory that moved</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemBridge - Verifiable Memory Migration</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@100..900&family=JetBrains+Mono:wght@100..900&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+<script>
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        colors: {
+          "on-background": "#e4e1eb",
+          "background": "#13131a",
+          "surface": "#13131a",
+          "surface-dim": "#13131a",
+          "surface-bright": "#393840",
+          "surface-container-lowest": "#0e0e14",
+          "surface-container-low": "#1b1b22",
+          "surface-container": "#1f1f26",
+          "surface-container-high": "#2a2931",
+          "surface-container-highest": "#34343c",
+          "surface-variant": "#34343c",
+          "on-surface": "#e4e1eb",
+          "on-surface-variant": "#c8c4d9",
+          "outline": "#928ea2",
+          "outline-variant": "#474556",
+          "primary": "#c6bfff",
+          "primary-container": "#634bff",
+          "on-primary": "#2800a0",
+          "on-primary-container": "#f0ebff",
+          "secondary-container": "#464557",
+          "on-secondary-container": "#b5b3c8",
+          "tertiary": "#00dce5",
+          "tertiary-container": "#00787d",
+          "on-tertiary": "#003739",
+          "error": "#ffb4ab",
+          "error-container": "#93000a",
+          "on-error": "#690005",
+          "on-error-container": "#ffdad6",
+        },
+        borderRadius: { DEFAULT: "0.125rem", lg: "0.25rem", xl: "0.5rem", full: "0.75rem" },
+        spacing: { gutter: "16px", "margin-mobile": "16px", unit: "4px", "container-max": "1440px", "margin-desktop": "32px" },
+        fontFamily: {
+          "label-caps": ["JetBrains Mono"], "headline-lg": ["Hanken Grotesk"], "body-md": ["Hanken Grotesk"],
+          "headline-xl": ["Hanken Grotesk"], "headline-sm": ["Hanken Grotesk"], "body-sm": ["Hanken Grotesk"],
+          "code-md": ["JetBrains Mono"], "code-sm": ["JetBrains Mono"],
+        },
+        // Five steps, each ~1.25x the last -- a sixth is how a scale turns
+        // back into mush. label-caps and code-sm share a tier deliberately:
+        // both are the smallest tier of mono text, distinguished by tracking
+        // and weight rather than by size.
+        fontSize: {
+          "label-caps": ["11.5px", { lineHeight: "16px", letterSpacing: "0.08em", fontWeight: "700" }],
+          "code-sm": ["11.5px", { lineHeight: "16px", letterSpacing: "0.02em", fontWeight: "500" }],
+          "code-md": ["14px", { lineHeight: "20px", fontWeight: "500" }],
+          "body-sm": ["14px", { lineHeight: "20px", fontWeight: "400" }],
+          "body-md": ["17.5px", { lineHeight: "28px", fontWeight: "400" }],
+          "headline-sm": ["22px", { lineHeight: "30px", fontWeight: "600" }],
+          "headline-lg": ["28px", { lineHeight: "34px", letterSpacing: "-0.01em", fontWeight: "600" }],
+          "headline-xl": ["clamp(2.1rem, 6.4vw, 3.9rem)", { lineHeight: "1.05", letterSpacing: "-0.02em", fontWeight: "700" }],
+        },
+      },
+    },
+  };
+</script>
 <style>
-  :root {
-    --bg: #0a0c10;
-    --surface: #12161d;
-    --line: #1d232d;
-    --line-soft: #161b23;
-    --ink: #e9eef5;
-    --muted: #98a3b2;
-    --dim: #707b8a;
-
-    /* The only colours on this page encode provenance. Nothing is tinted
-       for decoration, so a coloured thing is always a claim about origin. */
-    --migrated: #e8963f;
-    --native: #4ec295;
-    --expired: #ea6a5e;
-
-    --sans: Archivo, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-
-    /* Five steps, each ~1.25x the last. Anything that wants a size picks one
-       of these; a sixth step is how a scale turns back into mush. */
-    --t-micro: 11.5px;
-    --t-ui: 14px;
-    --t-body: 17.5px;
-    --t-lead: 22px;
-    --t-display: clamp(2.1rem, 6.4vw, 3.9rem);
-
-    --ease: cubic-bezier(.16, 1, .3, 1);
-  }
-  * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
   body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--ink);
-    font: 400 var(--t-body)/1.6 var(--sans);
-    -webkit-font-smoothing: antialiased;
+    background-image: linear-gradient(to right, rgba(255,255,255,0.02) 1px, transparent 1px),
+                      linear-gradient(to bottom, rgba(255,255,255,0.02) 1px, transparent 1px);
+    background-size: 24px 24px;
+    background-attachment: fixed;
+    min-height: max(884px, 100dvh);
   }
-  :focus-visible { outline: 2px solid var(--migrated); outline-offset: 2px; border-radius: 3px; }
-
-  .shell { max-width: 780px; margin: 0 auto; padding: 0 24px; }
-
-  /* ---- top bar ---- */
-  .bar {
-    display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
-    padding: 20px 0 0;
+  .glass-panel { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); }
+  .pulse-orb { animation: pulse-ring 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite; }
+  @keyframes pulse-ring {
+    0% { box-shadow: 0 0 0 0 rgba(0, 220, 229, 0.4); }
+    70% { box-shadow: 0 0 0 6px rgba(0, 220, 229, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(0, 220, 229, 0); }
   }
-  .mark {
-    font: 800 var(--t-ui) var(--sans); font-variation-settings: "wdth" 118;
-    letter-spacing: .14em; text-transform: uppercase;
-  }
-  .mark em { font-style: normal; color: var(--migrated); }
-  .live { font: 400 var(--t-micro)/1.5 var(--mono); color: var(--dim); text-align: right; }
-  .live b { color: var(--muted); font-weight: 500; }
-
-  /* ---- hero ---- */
-  .hero { padding: clamp(48px, 11vh, 96px) 0 clamp(28px, 5vh, 44px); }
-  h1 {
-    margin: 0 0 20px;
-    font: 800 var(--t-display)/1.03 var(--sans);
-    font-variation-settings: "wdth" 112;
-    letter-spacing: -.032em;
-    text-wrap: balance;
-  }
-  h1 .moved { color: var(--migrated); }
-  .claim {
-    margin: 0; max-width: 56ch; color: var(--muted);
-    font-size: var(--t-body); line-height: 1.6; text-wrap: pretty;
-  }
-  .claim b { color: var(--ink); font-weight: 600; }
-
-  /* ---- console ---- */
-  .console { padding-bottom: 6px; }
-  .modes { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
-  .mode {
-    appearance: none; background: none; border: 0; cursor: pointer;
-    padding: 0 0 11px; margin-bottom: -1px;
-    font: 500 var(--t-ui) var(--sans); color: var(--dim);
-    border-bottom: 1.5px solid transparent;
-    transition: color .18s var(--ease);
-  }
-  .mode:hover { color: var(--muted); }
-  .mode[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--migrated); }
-
-  .query { display: flex; gap: 10px; }
-  #q {
-    flex: 1; min-width: 0;
-    background: var(--surface); border: 1px solid var(--line); border-radius: 7px;
-    color: var(--ink); padding: 13px 15px;
-    font: 400 var(--t-body) var(--sans);
-    transition: border-color .18s var(--ease);
-  }
-  #q::placeholder { color: var(--dim); }
-  #q:focus { outline: none; border-color: #3b444f; }
-  #go {
-    appearance: none; border: 0; border-radius: 7px; cursor: pointer;
-    background: var(--migrated); color: #17110a;
-    padding: 0 24px; font: 700 var(--t-ui) var(--sans);
-    transition: filter .18s var(--ease);
-  }
-  #go:hover:not(:disabled) { filter: brightness(1.1); }
-  #go:disabled { opacity: .45; cursor: default; }
-
-  .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
-  .chips button {
-    appearance: none; cursor: pointer;
-    background: none; border: 1px solid var(--line); border-radius: 999px;
-    color: var(--dim); padding: 6px 14px; font: 400 var(--t-ui) var(--sans);
-    transition: color .18s var(--ease), border-color .18s var(--ease);
-  }
-  .chips button:hover { color: var(--ink); border-color: #333c47; }
-
-  .controls {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
-    margin-top: 18px;
-  }
-  .switch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; font-size: var(--t-ui); color: var(--muted); }
-  .switch input { accent-color: var(--expired); width: 15px; height: 15px; cursor: pointer; }
-  .hint { margin: 0; font: 400 var(--t-micro)/1.5 var(--mono); color: var(--dim); }
-
-  /* ---- results ---- */
-  #out { padding: 30px 0 0; min-height: 200px; }
-  .rhead {
-    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline;
-    gap: 8px 16px; padding-bottom: 11px; border-bottom: 1px solid var(--line);
-    font: 400 var(--t-micro) var(--mono); color: var(--dim);
-  }
-  .legend { display: flex; gap: 14px; }
-  .legend span { display: inline-flex; align-items: center; gap: 6px; }
-  .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: currentColor; }
-  .is-migrated { color: var(--migrated); }
-  .is-native { color: var(--native); }
-  .is-expired { color: var(--expired); }
-
-  ol.rows { list-style: none; margin: 0; padding: 0; }
-  .row {
-    display: grid; grid-template-columns: 62px 1fr; gap: 0 18px;
-    padding: 17px 0; border-bottom: 1px solid var(--line-soft);
-    animation: rise .5s var(--ease) both;
-    animation-delay: calc(var(--i) * 45ms);
-  }
-  @keyframes rise { from { opacity: 0; transform: translateY(7px); } }
-  .sim { font: 500 var(--t-body) var(--mono); color: var(--muted); padding-top: 0; }
-  .content { margin: 0 0 9px; font-size: var(--t-body); line-height: 1.5; text-wrap: pretty; }
-  .meta {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
-    font: 400 var(--t-micro) var(--mono);
-  }
-  .src { display: inline-flex; align-items: center; gap: 6px; letter-spacing: .02em; }
-  .when { color: var(--dim); }
-
-  .answer {
-    margin: 0 0 30px; padding: 0 0 0 0;
-    font-size: var(--t-lead); line-height: 1.5; white-space: pre-wrap; text-wrap: pretty;
-  }
-  .trace { margin: 28px 0 9px; font: 400 var(--t-micro) var(--mono); color: var(--dim); }
-  .trace b { color: var(--muted); font-weight: 500; }
-
-  .status { margin: 0; padding: 18px 0; font: 400 var(--t-ui) var(--mono); color: var(--dim); }
-  .status.bad { color: var(--expired); }
-
-  /* ---- fidelity ledger ---- */
-  .ledger { margin-top: 60px; padding-top: 22px; border-top: 1px solid var(--line); }
-  .ledger-head {
-    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline;
-    gap: 6px 20px; font: 400 var(--t-micro) var(--mono); color: var(--dim);
-  }
-  .verdict {
-    font: 500 var(--t-ui) var(--mono); color: var(--native);
-    letter-spacing: .1em; text-transform: uppercase;
-  }
-  .fields {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
-    gap: 0 28px; margin-top: 18px;
-  }
-  .f {
-    display: flex; justify-content: space-between; gap: 12px;
-    padding: 7px 0; border-bottom: 1px solid var(--line-soft);
-    font: 400 var(--t-micro) var(--mono); color: var(--muted);
-  }
-  .f b { color: var(--native); font-weight: 500; }
-  .ledger-note { margin: 16px 0 0; font: 400 var(--t-micro)/1.7 var(--mono); color: var(--dim); }
-
-  /* ---- footer ---- */
-  footer {
-    margin-top: 64px; padding: 20px 0 40px; border-top: 1px solid var(--line);
-    font: 400 var(--t-micro)/1.9 var(--mono); color: var(--dim);
-    display: flex; flex-wrap: wrap; gap: 6px 20px; justify-content: space-between;
-  }
-  footer b { color: var(--muted); font-weight: 500; }
-
-  @media (max-width: 600px) {
-    .shell { padding: 0 18px; }
-    .bar { flex-direction: column; align-items: flex-start; gap: 6px; }
-    .live { text-align: left; }
-    .row { grid-template-columns: 1fr; gap: 7px; }
-    .sim { font-size: var(--t-ui); }
-    #go { padding: 0 16px; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  .pulse-orb.is-down { animation: pulse-ring-error 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite; }
+  @keyframes pulse-ring-error {
+    0% { box-shadow: 0 0 0 0 rgba(255, 180, 171, 0.4); }
+    70% { box-shadow: 0 0 0 6px rgba(255, 180, 171, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(255, 180, 171, 0); }
   }
 </style>
 </head>
-<body>
+<body class="bg-background text-on-background font-body-md min-h-screen flex flex-col pt-16 pb-20 md:pb-0">
 
-<div class="shell">
+<header class="fixed top-0 w-full bg-background/80 backdrop-blur-xl border-b border-white/10 z-50">
+  <div class="flex justify-between items-center h-16 px-gutter max-w-container-max mx-auto z-50">
+    <div class="flex items-center gap-2 text-primary">
+      <span class="material-symbols-outlined" style="font-variation-settings:'FILL' 1">memory</span>
+      <span class="font-headline-sm text-headline-sm font-bold text-primary tracking-tight">MemBridge</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <div class="w-2 h-2 rounded-full bg-tertiary pulse-orb" id="health-dot"></div>
+      <span class="font-code-sm text-code-sm text-on-surface-variant" id="health-text">connecting&hellip;</span>
+    </div>
+  </div>
+</header>
 
-  <header class="bar">
-    <div class="mark">Mem<em>Bridge</em></div>
-    <div class="live" id="stats">reading the store&hellip;</div>
-  </header>
+<nav class="md:hidden fixed bottom-0 left-0 right-0 bg-surface-container border-t border-white/10 z-40 pb-safe">
+  <div class="flex justify-around items-center h-16">
+    <a class="flex flex-col items-center justify-center w-full h-full text-primary" href="#search">
+      <span class="material-symbols-outlined text-xl mb-1">search</span>
+      <span class="font-label-caps text-label-caps">Search</span>
+    </a>
+    <a class="flex flex-col items-center justify-center w-full h-full text-on-surface-variant hover:text-primary transition-colors duration-200" href="#qa">
+      <span class="material-symbols-outlined text-xl mb-1">psychology</span>
+      <span class="font-label-caps text-label-caps">Ask</span>
+    </a>
+    <a class="flex flex-col items-center justify-center w-full h-full text-on-surface-variant hover:text-primary transition-colors duration-200" href="#ledger">
+      <span class="material-symbols-outlined text-xl mb-1">security</span>
+      <span class="font-label-caps text-label-caps">Ledger</span>
+    </a>
+    <a class="flex flex-col items-center justify-center w-full h-full text-on-surface-variant hover:text-primary transition-colors duration-200" href="#cli">
+      <span class="material-symbols-outlined text-xl mb-1">terminal</span>
+      <span class="font-label-caps text-label-caps">CLI</span>
+    </a>
+  </div>
+</nav>
 
-  <section class="hero">
-    <h1>Memory that <span class="moved">moved</span>,<br>and left no seam.</h1>
-    <p class="claim">
-      Every memory below is a row in the same CockroachDB table. Some were written there; the rest
-      were migrated out of Mem0 with <b>all 15 fields and their vectors intact</b>. Only the badge
-      still knows the difference &mdash; the vector index doesn&rsquo;t, and neither does the agent.
+<main class="flex-grow w-full max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-8 flex flex-col gap-8 md:pl-72">
+
+  <div class="hidden md:block fixed left-0 top-16 h-[calc(100vh-64px)] w-64 bg-surface-container border-r border-white/10 shadow-xl z-40">
+    <div class="p-4 border-b border-white/10">
+      <h2 class="font-code-md text-code-md text-primary font-bold">SYSTEM_MENU</h2>
+    </div>
+    <div class="flex flex-col gap-2 p-2 mt-4">
+      <a class="flex items-center gap-3 bg-primary-container text-on-primary-container rounded-lg px-3 py-2 font-code-md text-code-md" href="#search">
+        <span class="material-symbols-outlined text-lg">search</span>Search
+      </a>
+      <a class="flex items-center gap-3 text-on-surface-variant hover:bg-white/5 rounded-lg px-3 py-2 font-code-md text-code-md transition-colors duration-200" href="#qa">
+        <span class="material-symbols-outlined text-lg">psychology</span>Ask the agent
+      </a>
+      <a class="flex items-center gap-3 text-on-surface-variant hover:bg-white/5 rounded-lg px-3 py-2 font-code-md text-code-md transition-colors duration-200" href="#ledger">
+        <span class="material-symbols-outlined text-lg">security</span>Fidelity ledger
+      </a>
+      <a class="flex items-center gap-3 text-on-surface-variant hover:bg-white/5 rounded-lg px-3 py-2 font-code-md text-code-md transition-colors duration-200" href="#cli">
+        <span class="material-symbols-outlined text-lg">terminal</span>The CLI
+      </a>
+    </div>
+  </div>
+
+  <section class="py-8 flex flex-col gap-4">
+    <h1 class="font-headline-xl text-headline-xl text-on-surface">Memory that <span class="text-primary">moved</span>, and left no seam.</h1>
+    <p class="font-body-md text-body-md text-on-surface-variant max-w-2xl">
+      Every memory below lives in the same CockroachDB table. Some were written there; the rest were migrated
+      out of Mem0 with all 15 fields and their vectors intact. Only the badge still knows the difference &mdash;
+      the vector index doesn't, and neither does the agent.
     </p>
   </section>
 
-  <section class="console">
-    <div class="modes" role="tablist" aria-label="How to query memory">
-      <button class="mode" id="tab-search" role="tab" aria-selected="true" aria-controls="out">Search memory</button>
-      <button class="mode" id="tab-ask" role="tab" aria-selected="false" aria-controls="out">Ask the agent</button>
-    </div>
-
-    <form class="query" id="form">
-      <input type="text" id="q" autocomplete="off" spellcheck="false" aria-label="Query">
-      <button id="go" type="submit">Search</button>
+  <!-- Live Search -->
+  <section class="flex flex-col gap-4 scroll-mt-24" id="search">
+    <h2 class="font-headline-sm text-headline-sm text-on-surface border-b border-white/10 pb-2">Live Memory Search</h2>
+    <form class="relative w-full" id="search-form">
+      <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant">search</span>
+      <input class="w-full bg-surface-container-high border border-white/10 rounded-lg py-3 pl-10 pr-16 text-on-surface font-code-md text-code-md focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all placeholder:text-on-surface-variant/50"
+             placeholder="food I cannot eat" type="text" id="search-q" autocomplete="off" spellcheck="false">
+      <button class="absolute right-2 top-1/2 -translate-y-1/2 bg-primary-container text-on-primary-container px-3 py-1.5 rounded font-code-sm text-code-sm" type="submit">Go</button>
     </form>
-
-    <div class="chips" id="chips"></div>
-
-    <div class="controls">
-      <label class="switch">
-        <input type="checkbox" id="expired">
-        <span>Include expired memories</span>
-      </label>
-      <p class="hint" id="hint">try it on a dinner reservation &mdash; the top match lapsed yesterday</p>
-    </div>
+    <div class="flex flex-wrap gap-2" id="search-chips"></div>
+    <label class="flex items-center gap-2 font-body-sm text-body-sm text-on-surface-variant cursor-pointer select-none">
+      <input type="checkbox" id="search-expired" class="rounded border-white/20 bg-surface-container-high text-primary focus:ring-primary">
+      Include expired memories
+      <span class="font-code-sm text-code-sm text-outline">&mdash; one scoped vector query, no model in the loop</span>
+    </label>
+    <div class="flex flex-col gap-3" id="search-out"></div>
   </section>
 
-  <section id="out" aria-live="polite"></section>
-
-  <section class="ledger">
-    <div class="ledger-head">
-      <span class="verdict">Migration intact</span>
-      <span>mem0 &rarr; cockroachdb &middot; 5/5 records aligned by content fingerprint</span>
-    </div>
-    <div class="fields" id="fields"></div>
-    <p class="ledger-note">
-      Every field CMM can carry, scored on the round trip that put these memories here &mdash;
-      read out of a live Mem0 store, written, and read back. Vectors are compared bit-exactly,
-      not approximately. A field nobody checks is a field nobody can claim survived.
+  <!-- Ask the agent -->
+  <section class="flex flex-col gap-4 scroll-mt-24" id="qa">
+    <h2 class="font-headline-sm text-headline-sm text-on-surface border-b border-white/10 pb-2">Ask the Agent</h2>
+    <p class="font-body-sm text-body-sm text-on-surface-variant">
+      Recalled memories are shown alongside the answer &mdash; an assistant that says the right thing while
+      having retrieved nothing is guessing, and this is how you can tell.
     </p>
+    <div class="glass-panel bg-surface-container-low rounded-xl overflow-hidden border border-white/10">
+      <div class="p-4 flex flex-col gap-4" id="qa-out">
+        <p class="font-body-sm text-body-sm text-on-surface-variant text-center py-6">Ask something below.</p>
+      </div>
+      <form class="border-t border-white/10 p-3 flex gap-2" id="qa-form">
+        <input class="flex-1 bg-surface-container-high border border-white/10 rounded-lg py-2.5 px-3 text-on-surface font-body-sm text-body-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none placeholder:text-on-surface-variant/50"
+               placeholder="What should I know before booking dinner?" type="text" id="qa-q" autocomplete="off" spellcheck="false">
+        <button class="bg-primary-container text-on-primary-container px-4 py-2 rounded-lg font-code-sm text-code-sm shrink-0" type="submit">Ask</button>
+      </form>
+    </div>
+    <div class="flex flex-wrap gap-2" id="qa-chips"></div>
   </section>
 
-  <footer>
-    <span>CMM v0.1.0 &middot; adapters at both ends &middot; a score that can fail</span>
-    <span>87 tests</span>
+  <!-- Fidelity Ledger -->
+  <section class="flex flex-col gap-4 scroll-mt-24" id="ledger">
+    <h2 class="font-headline-sm text-headline-sm text-on-surface border-b border-white/10 pb-2">Fidelity Ledger</h2>
+    <p class="font-body-sm text-body-sm text-on-surface-variant">
+      Every field CMM can carry, aligned by content fingerprint and scored against CockroachDB right now &mdash;
+      not baked in at deploy time. The corrupted checks tamper a copy of the same live records in memory first,
+      so a LOSSY verdict below is the real fidelity module catching a real, if staged, mistake.
+    </p>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3" id="ledger-modes"></div>
+
+    <div class="glass-panel bg-surface-container-highest rounded-xl p-6 flex flex-col gap-6 relative overflow-hidden">
+      <div class="absolute inset-0 opacity-[0.03] pointer-events-none" style="background-image: linear-gradient(to right, #fff 1px, transparent 1px), linear-gradient(to bottom, #fff 1px, transparent 1px); background-size: 12px 12px;"></div>
+
+      <div class="flex justify-between items-start z-10 font-code-sm text-code-sm text-outline">
+        <div id="ledger-sub">mem0 &rarr; cockroachdb</div>
+        <div id="ledger-caption"></div>
+      </div>
+
+      <div class="flex flex-col items-center justify-center py-4 z-10 border-y border-white/5">
+        <div class="font-headline-lg text-headline-lg tracking-widest font-bold flex items-center gap-3" id="ledger-verdict">
+          <span class="material-symbols-outlined text-[32px]" id="ledger-verdict-icon">hourglass_top</span>
+          <span id="ledger-verdict-text">CHECKING&hellip;</span>
+        </div>
+      </div>
+
+      <div class="w-full z-10 grid grid-cols-1 sm:grid-cols-2 gap-y-3 font-code-sm text-code-sm" id="ledger-fields"></div>
+
+      <div class="w-full z-10 flex flex-col gap-2" id="ledger-losses"></div>
+    </div>
+  </section>
+
+  <!-- The CLI -->
+  <section class="flex flex-col gap-4 scroll-mt-24 mb-8" id="cli">
+    <h2 class="font-headline-sm text-headline-sm text-on-surface border-b border-white/10 pb-2">The CLI</h2>
+    <div class="max-w-[780px] mx-auto w-full rounded-lg overflow-hidden border border-white/10 shadow-2xl">
+      <div class="bg-surface-container-highest px-4 py-2 flex items-center relative">
+        <div class="flex gap-1.5">
+          <div class="w-3 h-3 rounded-full bg-[#ff5f56]"></div>
+          <div class="w-3 h-3 rounded-full bg-[#ffbd2e]"></div>
+          <div class="w-3 h-3 rounded-full bg-[#27c93f]"></div>
+        </div>
+        <div class="absolute inset-0 flex justify-center items-center pointer-events-none">
+          <span class="font-code-sm text-code-sm text-on-surface-variant">membridge</span>
+        </div>
+      </div>
+      <div class="bg-surface-dim p-4 overflow-x-auto">
+<pre class="font-code-sm text-code-sm leading-relaxed text-[#e9eef5]"><code><span class="text-[#98a3b2]">Usage: membridge [OPTIONS] COMMAND [ARGS]...
+
+Migrate agent memory between stores, and measure what survived.</span>
+
+<span class="text-[#707b8a]">Commands</span>
+  <span class="text-[#7dd3c0]">schema</span>   Check, or create, the CMM schema in a CockroachDB target.
+  <span class="text-[#7dd3c0]">bundles</span>  List the migration bundles held in a target.
+  <span class="text-[#7dd3c0]">migrate</span>  Mem0 -&gt; CMM -&gt; CockroachDB, then read it back and score it.
+  <span class="text-[#7dd3c0]">search</span>   Semantic recall straight against the store, with no model in the way.
+  <span class="text-[#7dd3c0]">ask</span>      Ask the agent, and see which memories it used to answer.
+
+<span class="text-[#98a3b2]">$ membridge ask "what are our favorite restaurants and food preferences?" --user-id john_001</span>
+  recall('favorite restaurants food preferences dietary likes dislikes cuisine') -&gt; 5 memories
+    [0.506] Our favourite restaurant for a night out is Casa Lupita on Bell Street.
+    [0.451] I cannot eat shrimp, crab, lobster or anything cooked in the same fryer.
+    ...
+
+<span class="text-tertiary">[OK]</span> Your favorite restaurant for a night out is Casa Lupita on Bell Street. For food
+preferences, you avoid shellfish and dislike coriander, while Maria eats a vegetarian diet.</code></pre>
+      </div>
+    </div>
+    <p class="text-center font-body-sm text-body-sm text-outline">Five commands, one claim: what you migrate is what you can measure.</p>
+  </section>
+
+  <footer class="border-t border-white/10 mt-4 pt-6 pb-10 flex flex-wrap gap-2 justify-between font-code-sm text-code-sm text-outline">
+    <span>CMM v0.1.0 &middot; adapters at both ends, a score that can fail</span>
+    <span>107 tests</span>
   </footer>
 
-</div>
+</main>
 
 <script>
 // Replaced at deploy time by scripts/deploy_aws.sh. The prompt fallback keeps the
@@ -288,166 +286,272 @@ const API_URL = (function () {
 
 const USER_ID = new URLSearchParams(location.search).get("user") || "john_001";
 
-const MODES = {
-  search: {
-    label: "Search",
-    placeholder: "food I cannot eat",
-    hint: "one scoped vector query, no model in the loop",
-    opening: "food I cannot eat",
-    chips: ["food I cannot eat", "dinner reservation restaurant booking", "flying and airports", "who is Maria"],
-  },
-  ask: {
-    label: "Ask",
-    placeholder: "What should I know before booking dinner?",
-    hint: "the model may call recall_memory more than once",
-    opening: "",
-    chips: [
-      "What should I know before booking dinner for me and my partner?",
-      "Do I have anything booked this week?",
-      "What time should you avoid scheduling meetings?",
-    ],
-  },
-};
-
-let mode = "search";
-
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-function setMode(next) {
-  mode = next;
-  const cfg = MODES[next];
-  $("tab-search").setAttribute("aria-selected", String(next === "search"));
-  $("tab-ask").setAttribute("aria-selected", String(next === "ask"));
-  $("go").textContent = cfg.label;
-  $("q").placeholder = cfg.placeholder;
-  $("q").value = "";
-  $("hint").textContent = cfg.hint;
-  $("chips").innerHTML = cfg.chips.map((t, i) => `<button type="button" data-i="${i}">${esc(t)}</button>`).join("");
-  $("out").innerHTML = "";
-}
+const SEARCH_CHIPS = ["food I cannot eat", "dinner reservation restaurant booking", "flying and airports", "who is Maria"];
+const QA_CHIPS = [
+  "What should I know before booking dinner for me and my partner?",
+  "Do I have anything booked this week?",
+  "What time should you avoid scheduling meetings?",
+];
 
-$("chips").addEventListener("click", (e) => {
+$("search-chips").innerHTML = SEARCH_CHIPS.map((t, i) => `<button type="button" data-i="${i}" class="bg-surface-container border border-white/10 hover:border-primary/50 text-on-surface-variant hover:text-on-surface px-3 py-1.5 rounded-full font-code-sm text-code-sm transition-colors">${esc(t)}</button>`).join("");
+$("qa-chips").innerHTML = QA_CHIPS.map((t, i) => `<button type="button" data-i="${i}" class="bg-surface-container border border-white/10 hover:border-primary/50 text-on-surface-variant hover:text-on-surface px-3 py-1.5 rounded-full font-code-sm text-code-sm transition-colors">${esc(t)}</button>`).join("");
+
+$("search-chips").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;
-  $("q").value = MODES[mode].chips[b.dataset.i];
-  run();
+  $("search-q").value = SEARCH_CHIPS[b.dataset.i];
+  runSearch();
+});
+$("qa-chips").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  $("qa-q").value = QA_CHIPS[b.dataset.i];
+  runAsk();
 });
 
-function rowHTML(hit, i) {
+// CMM's scope model is user_id/agent_id/session_id/app_id, not just a user --
+// shown here because it is otherwise invisible: every query on this page is
+// scoped by user_id alone, so a viewer would never see that some records also
+// carry an agent_id and a session_id (Mem0's run_id), or that multi-actor
+// attribution (role/actor_id) survived the migration.
+function scopeHTML(hit) {
+  const parts = [];
+  if (hit.agent_id) parts.push(`agent ${esc(hit.agent_id)}`);
+  if (hit.session_id) parts.push(`session ${esc(hit.session_id)}`);
+  if (hit.actor_id) parts.push(`actor ${esc(hit.actor_id)}${hit.role ? ` (${esc(hit.role)})` : ""}`);
+  return parts.length ? `<span>${parts.join(", ")}</span>` : "";
+}
+
+function hitCardHTML(hit) {
   const migrated = hit.source_system === "mem0";
   const expired = hit.expires_at && new Date(hit.expires_at) < new Date();
   const score = hit.similarity == null ? hit.distance.toFixed(3) : hit.similarity.toFixed(3);
-  const cls = migrated ? "is-migrated" : "is-native";
-  return `<li class="row" style="--i:${i}">
-    <span class="sim">${score}</span>
-    <div>
-      <p class="content">${esc(hit.content)}</p>
-      <div class="meta">
-        <span class="src ${cls}"><i class="dot"></i>${migrated ? "migrated from Mem0" : "written here"}</span>
-        ${expired ? '<span class="src is-expired"><i class="dot"></i>expired</span>' : ""}
-        <span class="when">${esc((hit.created_at || "").slice(0, 10))}</span>
+  const badge = migrated
+    ? `<span class="shrink-0 bg-secondary-container text-on-secondary-container px-2 py-1 rounded font-code-sm text-code-sm whitespace-nowrap">Migrated (Mem0)</span>`
+    : `<span class="shrink-0 bg-surface-bright text-on-surface px-2 py-1 rounded font-code-sm text-code-sm border border-white/10 whitespace-nowrap">Native</span>`;
+  const expiredTag = expired
+    ? `<span class="shrink-0 bg-error-container/30 text-error px-2 py-1 rounded font-code-sm text-code-sm border border-error/20 whitespace-nowrap">Expired</span>`
+    : "";
+  return `<div class="glass-panel bg-surface-container/50 rounded-lg p-4 flex flex-col gap-3 hover:border-primary/50 transition-colors">
+    <div class="flex justify-between items-start gap-4">
+      <p class="font-body-md text-body-md text-on-surface">${esc(hit.content)}</p>
+      <div class="flex gap-2 shrink-0">${badge}${expiredTag}</div>
+    </div>
+    <div class="flex flex-wrap gap-2 items-center">
+      <div class="flex items-center gap-1 bg-surface-variant px-2 py-0.5 rounded border border-white/5">
+        <span class="font-code-sm text-code-sm text-on-surface-variant">${score}</span>
+      </div>
+      <div class="font-code-sm text-code-sm text-outline flex gap-2">
+        ${scopeHTML(hit)}
+        <span>${esc((hit.created_at || "").slice(0, 10))}</span>
       </div>
     </div>
-  </li>`;
+  </div>`;
 }
 
-function listHTML(hits, heading) {
-  if (!hits.length) return `<p class="status">Nothing matched.</p>`;
-  return `<div class="rhead">
-      <span>${heading}</span>
-      <span class="legend">
-        <span class="is-migrated"><i class="dot"></i>migrated from Mem0</span>
-        <span class="is-native"><i class="dot"></i>written here</span>
-      </span>
-    </div>
-    <ol class="rows">${hits.map(rowHTML).join("")}</ol>`;
+function hitListHTML(hits) {
+  if (!hits.length) return `<p class="font-body-sm text-body-sm text-on-surface-variant">Nothing matched.</p>`;
+  return hits.map(hitCardHTML).join("");
 }
 
-function searchHTML(data) {
-  return listHTML(data.hits, `${data.hits.length} memories, nearest first`);
-}
-
-function askHTML(data) {
-  let html = `<p class="answer">${esc(data.answer || "(no answer)")}</p>`;
-  if (!data.recalled || !data.recalled.length) {
-    return html + `<p class="status">The model answered without reading memory.</p>`;
-  }
-  for (const r of data.recalled) {
-    html += `<p class="trace">recall_memory(<b>${esc(r.query)}</b>)</p>`;
-    html += listHTML(r.hits, `${r.hits.length} memories`);
-  }
-  return html;
-}
-
-async function run() {
-  const text = $("q").value.trim();
-  if (!text) { $("q").focus(); return; }
-  if (!API_URL) { $("out").innerHTML = `<p class="status bad">No API URL configured.</p>`; return; }
-
-  $("go").disabled = true;
-  $("out").innerHTML = `<p class="status">searching 1061 memories&hellip;</p>`;
-
-  const route = mode === "ask" ? "/ask" : "/search";
-  const body = mode === "ask"
-    ? { question: text, user_id: USER_ID }
-    : { query: text, user_id: USER_ID, limit: 6, include_expired: $("expired").checked };
-
+async function runSearch() {
+  const text = $("search-q").value.trim();
+  if (!text) { $("search-q").focus(); return; }
+  if (!API_URL) { $("search-out").innerHTML = `<p class="text-error font-body-sm text-body-sm">No API URL configured.</p>`; return; }
+  $("search-out").innerHTML = `<p class="font-body-sm text-body-sm text-on-surface-variant">searching&hellip;</p>`;
   try {
-    const res = await fetch(API_URL + route, {
+    const res = await fetch(API_URL + "/search", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ query: text, user_id: USER_ID, limit: 6, include_expired: $("search-expired").checked }),
     });
     const data = await res.json();
-    $("out").innerHTML = !res.ok
-      ? `<p class="status bad">${esc(data.error || res.status)}</p>`
-      : (mode === "ask" ? askHTML(data) : searchHTML(data));
+    $("search-out").innerHTML = !res.ok
+      ? `<p class="text-error font-body-sm text-body-sm">${esc(data.error || res.status)}</p>`
+      : hitListHTML(data.hits);
   } catch (e) {
-    $("out").innerHTML = `<p class="status bad">${esc(e.message)}</p>`;
-  } finally {
-    $("go").disabled = false;
+    $("search-out").innerHTML = `<p class="text-error font-body-sm text-body-sm">${esc(e.message)}</p>`;
   }
 }
 
-async function loadStats() {
-  if (!API_URL) { $("stats").textContent = "no API configured"; return; }
+function qaBubbleHTML(question) {
+  return `<div class="flex justify-end"><div class="bg-primary-container text-on-primary-container rounded-lg rounded-tr-none px-4 py-3 max-w-[85%] font-body-sm text-body-sm">${esc(question)}</div></div>`;
+}
+
+function qaAnswerHTML(data) {
+  let inner = "";
+
+  // The whole argument of this page is that the memory layer and the model are
+  // separable. When the model is down that stops being an argument and becomes
+  // something you can watch: the memories are still here, still badged by
+  // provenance, and the only missing part is the prose.
+  if (data.degraded) {
+    inner += `<div class="bg-error-container/20 border border-error/20 rounded-lg px-3 py-2 mb-2 flex items-center gap-2">
+      <span class="material-symbols-outlined text-error text-sm">warning</span>
+      <span class="font-label-caps text-label-caps text-error">MODEL UNREACHABLE &mdash; MEMORY LAYER ONLY</span>
+    </div>`;
+  }
+
+  inner += `<p class="mb-2">${esc(data.answer || "(no answer)")}</p>`;
+
+  if (data.recalled && data.recalled.length) {
+    for (const r of data.recalled) {
+      const label = r.fallback
+        ? `search(<b class="text-tertiary">${esc(r.query)}</b>) &mdash; MemBridge's query, the model never got to choose one`
+        : `recall_memory(<b class="text-tertiary">${esc(r.query)}</b>)`;
+      inner += `<div class="mt-3 pt-2 border-t border-white/10 font-code-sm text-code-sm text-on-surface-variant">${label} &rarr; ${r.hits.length} memories</div>`;
+    }
+  }
+
+  return `<div class="flex justify-start items-start gap-3">
+    <div class="w-8 h-8 rounded-full bg-tertiary flex items-center justify-center shrink-0">
+      <span class="material-symbols-outlined text-on-tertiary text-lg">psychology</span>
+    </div>
+    <div class="bg-surface-variant text-on-surface-variant rounded-lg rounded-tl-none px-4 py-3 max-w-[85%] font-body-sm text-body-sm border border-white/5">${inner}</div>
+  </div>`;
+}
+
+async function runAsk() {
+  const text = $("qa-q").value.trim();
+  if (!text) { $("qa-q").focus(); return; }
+  if (!API_URL) { $("qa-out").innerHTML = `<p class="text-error font-body-sm text-body-sm text-center py-6">No API URL configured.</p>`; return; }
+
+  $("qa-out").innerHTML = qaBubbleHTML(text) + `<p class="font-body-sm text-body-sm text-on-surface-variant">thinking&hellip;</p>`;
+  $("qa-q").value = "";
+  try {
+    const res = await fetch(API_URL + "/ask", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question: text, user_id: USER_ID }),
+    });
+    const data = await res.json();
+    $("qa-out").innerHTML = qaBubbleHTML(text) + (!res.ok
+      ? `<p class="text-error font-body-sm text-body-sm">${esc(data.error || res.status)}</p>`
+      : qaAnswerHTML(data));
+  } catch (e) {
+    $("qa-out").innerHTML = qaBubbleHTML(text) + `<p class="text-error font-body-sm text-body-sm">${esc(e.message)}</p>`;
+  }
+}
+
+async function loadHealth() {
+  if (!API_URL) { $("health-text").textContent = "no API configured"; $("health-dot").classList.add("is-down"); return; }
   try {
     const d = await (await fetch(API_URL + "/health")).json();
     const mem0 = (d.bundles_by_source || {}).mem0 || 0;
-    $("stats").innerHTML =
-      `<b>${d.records}</b> memories &middot; CockroachDB Cloud<br>` +
-      `${mem0} migrated bundle${mem0 === 1 ? "" : "s"} &middot; user <b>${esc(USER_ID)}</b>`;
+    $("health-text").textContent = `${d.records} memories · ${mem0} migrated`;
+    $("health-dot").classList.remove("is-down");
   } catch (e) {
-    $("stats").textContent = "store unreachable";
+    $("health-text").textContent = "store unreachable";
+    $("health-dot").classList.add("is-down");
   }
 }
 
-$("form").addEventListener("submit", (e) => { e.preventDefault(); run(); });
-$("tab-search").onclick = () => setMode("search");
-$("tab-ask").onclick = () => setMode("ask");
-$("expired").onchange = () => { if (mode === "search" && $("q").value.trim()) run(); };
-
-// The recorded round trip: membridge.fidelity scoring a live Mem0 read against
-// the same bundle written to CockroachDB and read back, aligned by content
-// fingerprint. Static because Mem0 is not deployed — this is the measurement
-// that produced the migrated memories above, not a live re-run.
-const FIELDS = [
-  "content", "scope", "attribution", "created_at", "updated_at",
-  "expires_at", "metadata", "extensions", "cmm_version", "id",
-  "provenance", "embedding.model", "embedding.dim",
-  "embedding.normalized", "embedding.vector",
+// A static ledger of 5/5 everywhere is indistinguishable from a scorer that
+// always says so. Every mode below hits /fidelity live: "Live migration" reads
+// the actually-migrated records out of CockroachDB right now and scores them;
+// the others corrupt a copy of that same data in memory first, so a LOSSY
+// verdict here is the real fidelity module catching a real mistake, not a
+// canned failure state.
+const FIDELITY_MODES = [
+  { id: "intact", label: "Live migration" },
+  { id: "drop_expiry", label: "Drop expires_at" },
+  { id: "corrupt_vector", label: "Invert a vector" },
+  { id: "simulate_quantization_loss", label: "Simulate float32 loss" },
 ];
-$("fields").innerHTML = FIELDS
-  .map((f) => `<div class="f"><span>${esc(f)}</span><b>5/5</b></div>`)
-  .join("");
+
+$("ledger-modes").innerHTML = FIDELITY_MODES.map((m) =>
+  `<button type="button" data-mode="${m.id}" aria-pressed="${m.id === "intact"}"
+     class="bg-surface-container border border-white/10 aria-pressed:border-primary aria-pressed:text-primary text-on-surface-variant hover:border-primary/50 px-3 py-2.5 rounded-lg font-code-sm text-code-sm transition-colors">${esc(m.label)}</button>`
+).join("");
+$("ledger-modes").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (b) loadFidelity(b.dataset.mode);
+});
+
+function fieldHTML(f) {
+  const shown = f.intact ? `${f.survived}/${f.aligned}` : `${f.survived}/${f.aligned}, credit ${f.partial_rate.toFixed(2)}`;
+  const note = f.read_scoped ? `<span class="text-outline text-[10px] ml-1">(read-scoped)</span>` : "";
+  const valueColor = f.intact ? "text-tertiary" : "text-error";
+  return `<div class="flex justify-between items-center py-1.5 border-b border-white/5">
+    <span class="text-on-surface-variant">${esc(f.field)}${note}</span>
+    <span class="${valueColor} flex items-center gap-1">${shown}</span>
+  </div>`;
+}
+
+function lossHTML(loss) {
+  const critical = loss.severity === "critical";
+  return `<div class="bg-surface-container border-l-2 ${critical ? "border-error" : "border-outline-variant"} rounded px-3 py-2">
+    <div class="flex flex-wrap gap-2 items-baseline font-label-caps text-label-caps ${critical ? "text-error" : "text-on-surface-variant"}">
+      <span>${esc(loss.severity)}</span><span>${esc(loss.kind)}</span>${loss.field ? `<span>[${esc(loss.field)}]</span>` : ""}
+    </div>
+    <p class="font-code-sm text-code-sm text-outline mt-1 break-words">${esc(loss.detail)}</p>
+  </div>`;
+}
+
+function setVerdict(icon, text, colorClass) {
+  $("ledger-verdict-icon").textContent = icon;
+  $("ledger-verdict-text").textContent = text;
+  $("ledger-verdict").className = `font-headline-lg text-headline-lg tracking-widest font-bold flex items-center gap-3 ${colorClass}`;
+}
+
+async function loadFidelity(nextMode) {
+  document.querySelectorAll("#ledger-modes button").forEach((b) => {
+    b.setAttribute("aria-pressed", String(b.dataset.mode === nextMode));
+  });
+  if (!API_URL) return;
+
+  setVerdict("hourglass_top", "CHECKING…", "text-on-surface-variant");
+  try {
+    const res = await fetch(API_URL + "/fidelity", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: nextMode }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setVerdict("error", "CHECK FAILED", "text-error");
+      $("ledger-caption").textContent = data.error || String(res.status);
+      $("ledger-fields").innerHTML = "";
+      $("ledger-losses").innerHTML = "";
+      return;
+    }
+
+    // A third, deliberately distinct state exists for exactly one case: every
+    // field matched except a PRECISION_QUANTIZED one, which is real but
+    // bounded loss, not corruption. Painting that the same red as a CRITICAL
+    // loss would erase the one distinction compare_vector exists to draw.
+    if (data.intact) {
+      setVerdict("verified_user", "MIGRATION INTACT", "text-tertiary drop-shadow-[0_0_8px_rgba(0,220,229,0.3)]");
+    } else if (data.critical_count === 0) {
+      setVerdict("warning", "MIGRATION DEGRADED", "text-on-surface");
+    } else {
+      setVerdict("error", "MIGRATION LOSSY", "text-error");
+    }
+
+    $("ledger-sub").textContent = data.intact
+      ? `mem0 → cockroachdb · ${data.aligned}/${data.source_records} records aligned by content fingerprint`
+      : `worst field ${data.overall.toFixed(3)} · ${data.critical_count} critical`;
+    $("ledger-caption").textContent = data.mode_label || "";
+    $("ledger-fields").innerHTML = data.fields.map(fieldHTML).join("");
+    $("ledger-losses").innerHTML = data.losses.length ? data.losses.map(lossHTML).join("") : "";
+  } catch (e) {
+    setVerdict("error", "CHECK FAILED", "text-error");
+    $("ledger-caption").textContent = e.message;
+  }
+}
+
+$("search-form").addEventListener("submit", (e) => { e.preventDefault(); runSearch(); });
+$("qa-form").addEventListener("submit", (e) => { e.preventDefault(); runAsk(); });
 
 // Land on the argument rather than an empty box: the opening query returns a
 // Mem0-migrated memory ranked among natively-written ones.
-setMode("search");
-$("q").value = MODES.search.opening;
-loadStats();
-run();
+$("search-q").value = SEARCH_CHIPS[0];
+loadHealth();
+runSearch();
+loadFidelity("intact");
 </script>
 </body>
 </html>

@@ -7,6 +7,7 @@ there is no single confident percentage, because "97% migrated" hides which 3%,
 and whether the missing part was the content or the timestamps matters enormously.
 """
 
+from membridge.fidelity.demo import MODES, corrupt_vector, drop_expiry, simulate_quantization_loss
 from membridge.fidelity.models import (
     FidelityReport,
     FieldSurvival,
@@ -17,9 +18,12 @@ from membridge.fidelity.models import (
 from membridge.fidelity.render import render_text
 from membridge.fidelity.score import (
     DEFAULT_FIELDS,
+    READ_SCOPED_FIELDS,
     Comparison,
     compare_exact,
     compare_mapping,
+    compare_provenance,
+    compare_read_scoped,
     compare_vector,
     score,
 )
@@ -27,6 +31,8 @@ from membridge.fidelity.score import (
 __all__ = [
     "Comparison",
     "DEFAULT_FIELDS",
+    "MODES",
+    "READ_SCOPED_FIELDS",
     "FidelityReport",
     "FieldSurvival",
     "LossEntry",
@@ -34,7 +40,12 @@ __all__ = [
     "Severity",
     "compare_exact",
     "compare_mapping",
+    "compare_provenance",
+    "compare_read_scoped",
     "compare_vector",
+    "corrupt_vector",
+    "drop_expiry",
     "render_text",
     "score",
+    "simulate_quantization_loss",
 ]

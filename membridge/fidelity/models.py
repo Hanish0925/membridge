@@ -96,6 +96,14 @@ class FieldSurvival(BaseModel):
     #: hashes. Truncation is flagged by `changed_truncated`.
     changed: tuple[str, ...] = ()
     changed_truncated: bool = False
+    #: True for a field whose value records *when a read happened* rather than
+    #: what the migration did to the data -- `id` (minted fresh per read pass;
+    #: `fingerprint()` deliberately excludes it from the join key for the same
+    #: reason) is the only one today. Comparing two independent reads of the
+    #: same store reports these as mismatched by construction, never because
+    #: anything was lost, so `overall()` and `intact` ignore them rather than
+    #: reporting a migration as broken for producing a fresh id.
+    read_scoped: bool = False
 
     @property
     def intact(self) -> bool:
@@ -142,11 +150,18 @@ class FidelityReport(BaseModel):
 
     @property
     def intact(self) -> bool:
-        """Every source record arrived and every field matched exactly."""
+        """Every source record arrived and every scored field matched exactly.
+
+        Read-scoped fields are excluded on purpose: `id` differing between two
+        independent reads of the same store is the expected shape of a fresh
+        read pass, not evidence the migration lost anything, and gating
+        `intact` on it would report a perfect migration as broken for the crime
+        of being read twice.
+        """
         return (
             self.missing == 0
             and self.aligned == self.source_records
-            and all(field.intact for field in self.fields)
+            and all(field.intact for field in self.fields if not field.read_scoped)
         )
 
     def overall(self) -> float:
@@ -154,11 +169,16 @@ class FidelityReport(BaseModel):
 
         Averaging fields would let fourteen intact fields hide a destroyed one,
         which is precisely the summary this project exists to argue against.
+        Read-scoped fields are excluded for the same reason they are excluded
+        from `intact`: their exact-match rate reflects how many reads happened,
+        not how much survived.
         """
         if self.source_records == 0:
             return 1.0
         alignment = self.aligned / self.source_records
-        return min([alignment, *(field.rate for field in self.fields)])
+        return min(
+            [alignment, *(f.rate for f in self.fields if not f.read_scoped)]
+        )
 
     def critical(self) -> list[LossEntry]:
         return [loss for loss in self.losses if loss.severity is Severity.CRITICAL]
