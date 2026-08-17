@@ -290,6 +290,21 @@ const USER_ID = new URLSearchParams(location.search).get("user") || "john_001";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const truncate = (s, n) => (s.length > n ? s.slice(0, n).trimEnd() + "…" : s);
+
+// `data.failure` is `str(exc)` from LLMUnavailable -- true, but written for
+// CloudWatch, not a visitor (a raw provider error body, sometimes 400 chars
+// of JSON). Pattern-matching it into one plain sentence keeps the badge
+// readable; the raw string still renders underneath in monospace, same as
+// the ledger's friendly-label-over-raw-value pattern, so nothing is hidden.
+function explainFailure(raw) {
+  if (!raw) return "";
+  if (/ran out of time|no time left/i.test(raw)) return "The model ran out of time before answering.";
+  if (/\b429\b/.test(raw)) return "Rate limited — the provider's request quota is exhausted.";
+  if (/\b401\b|\b403\b|invalid.api.key/i.test(raw)) return "The provider rejected the request as unauthorized.";
+  if (/\b5\d\d\b/.test(raw)) return "The provider returned a server error.";
+  return "The model provider returned an error.";
+}
 
 const SEARCH_CHIPS = ["food I cannot eat", "dinner reservation restaurant booking", "flying and airports", "who is Maria"];
 const QA_CHIPS = [
@@ -391,9 +406,14 @@ function qaAnswerHTML(data) {
   // something you can watch: the memories are still here, still badged by
   // provenance, and the only missing part is the prose.
   if (data.degraded) {
-    inner += `<div class="bg-error-container/20 border border-error/20 rounded-lg px-3 py-2 mb-2 flex items-center gap-2">
-      <span class="material-symbols-outlined text-error text-sm">warning</span>
-      <span class="font-label-caps text-label-caps text-error">MODEL UNREACHABLE &mdash; MEMORY LAYER ONLY</span>
+    const reason = explainFailure(data.failure);
+    inner += `<div class="bg-error-container/20 border border-error/20 rounded-lg px-3 py-2 mb-2 flex flex-col gap-1">
+      <div class="flex items-center gap-2">
+        <span class="material-symbols-outlined text-error text-sm">warning</span>
+        <span class="font-label-caps text-label-caps text-error">MODEL UNREACHABLE &mdash; MEMORY LAYER ONLY</span>
+      </div>
+      ${reason ? `<p class="text-on-surface-variant">${esc(reason)}</p>` : ""}
+      ${data.failure ? `<p class="font-code-sm text-code-sm text-outline break-words">${esc(truncate(data.failure, 180))}</p>` : ""}
     </div>`;
   }
 
