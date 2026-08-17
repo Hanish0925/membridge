@@ -23,7 +23,7 @@ First real target pair: **Mem0 → CockroachDB**.
 
 The same memory the web demo queries, from the CLI:
 
-![`membridge ask` recalling scoped memories and answering from them](docs/img/cli-ask.png)
+![`membridge --help` listing the schema, bundles, migrate, search and ask commands](docs/img/cli-help.png)
 
 ```
 Mem0 (Qdrant + local LLM)  ──read──▶  CMM  ──write──▶  CockroachDB Cloud
