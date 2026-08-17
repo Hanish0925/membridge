@@ -198,9 +198,10 @@
   <section class="flex flex-col gap-4 scroll-mt-24" id="ledger">
     <h2 class="font-headline-sm text-headline-sm text-on-surface border-b border-white/10 pb-2">Fidelity Ledger</h2>
     <p class="font-body-sm text-body-sm text-on-surface-variant">
-      Every field CMM can carry, aligned by content fingerprint and scored against CockroachDB right now &mdash;
-      not baked in at deploy time. The corrupted checks tamper a copy of the same live records in memory first,
-      so a LOSSY verdict below is the real fidelity module catching a real, if staged, mistake.
+      Every memory migrated from Mem0 has ~15 pieces of data attached to it &mdash; the text, who said it, when it
+      expires, the search vector, and more. This checks each one, right now, against what's actually sitting in
+      CockroachDB &mdash; it is not a number baked in when the site was built. Below, green means a piece of data
+      survived the move unchanged; the buttons let you stage a specific, named mistake and watch the checker catch it.
     </p>
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3" id="ledger-modes"></div>
 
@@ -212,14 +213,15 @@
         <div id="ledger-caption"></div>
       </div>
 
-      <div class="flex flex-col items-center justify-center py-4 z-10 border-y border-white/5">
+      <div class="flex flex-col items-center justify-center gap-1 py-4 z-10 border-y border-white/5">
         <div class="font-headline-lg text-headline-lg tracking-widest font-bold flex items-center gap-3" id="ledger-verdict">
           <span class="material-symbols-outlined text-[32px]" id="ledger-verdict-icon">hourglass_top</span>
           <span id="ledger-verdict-text">CHECKING&hellip;</span>
         </div>
+        <p class="font-body-sm text-body-sm text-on-surface-variant text-center max-w-md" id="ledger-explain"></p>
       </div>
 
-      <div class="w-full z-10 grid grid-cols-1 sm:grid-cols-2 gap-y-3 font-code-sm text-code-sm" id="ledger-fields"></div>
+      <div class="w-full z-10 grid grid-cols-1 sm:grid-cols-2 gap-y-3 sm:gap-x-10 font-code-sm text-code-sm" id="ledger-fields"></div>
 
       <div class="w-full z-10 flex flex-col gap-2" id="ledger-losses"></div>
     </div>
@@ -471,30 +473,87 @@ $("ledger-modes").addEventListener("click", (e) => {
   if (b) loadFidelity(b.dataset.mode);
 });
 
+// Plain-language labels for CMM's internal field names, plus a one-line hint
+// (shown on hover) for anyone who wants the fuller explanation. The raw name
+// still renders in monospace below the label -- this is a translation, not a
+// replacement, since the raw name is what the fidelity module actually checks.
+const FIELD_META = {
+  content: ["Memory text", "The actual remembered fact, word for word."],
+  scope: ["Who it belongs to", "The user/agent/session this memory is scoped to."],
+  attribution: ["Who said it", "The user, the assistant, or unknown."],
+  created_at: ["Created", "When this memory was first recorded."],
+  updated_at: ["Last updated", "When this memory was last edited."],
+  expires_at: ["Expires", "When this memory stops being valid, if ever."],
+  metadata: ["Extra tags", "Any additional key/value data attached to the memory."],
+  extensions: ["Vendor extras", "Mem0-specific data that doesn't fit the shared schema, carried through as-is."],
+  cmm_version: ["Schema version", "The version of the shared format both systems agree on."],
+  id: ["Record ID", "Expected to differ between two reads of the same data -- not counted as loss."],
+  provenance: ["Origin", "Which system this memory came from, and when it was read."],
+  "embedding.model": ["Search model", "Which AI model turned the text into a search vector."],
+  "embedding.dim": ["Vector size", "How many numbers make up the search vector."],
+  "embedding.normalized": ["Vector normalized", "Whether the vector's length is exactly 1, which fast search relies on."],
+  "embedding.vector": ["Search vector", "The numbers used to find this memory by meaning, not keywords."],
+};
+
 function fieldHTML(f) {
-  const shown = f.intact ? `${f.survived}/${f.aligned}` : `${f.survived}/${f.aligned}, credit ${f.partial_rate.toFixed(2)}`;
-  const note = f.read_scoped ? `<span class="text-outline text-[10px] ml-1">(read-scoped)</span>` : "";
+  const shown = f.intact
+    ? `${f.survived}/${f.aligned} exact`
+    : `${f.survived}/${f.aligned} exact &middot; ${Math.round(f.partial_rate * 100)}% credited`;
+  const [label, hint] = FIELD_META[f.field] || [f.field, ""];
+  const note = f.read_scoped
+    ? `<span class="text-outline text-[10px] ml-1" title="This can legitimately differ between two reads of the same migration, so it is never scored as loss.">(expected to differ)</span>`
+    : "";
   const valueColor = f.intact ? "text-tertiary" : "text-error";
-  return `<div class="flex justify-between items-center py-1.5 border-b border-white/5">
-    <span class="text-on-surface-variant">${esc(f.field)}${note}</span>
+  return `<div class="flex justify-between items-center py-1.5 border-b border-white/5" title="${esc(hint)}">
+    <span class="text-on-surface-variant flex flex-col leading-tight">
+      <span>${esc(label)}${note}</span>
+      <span class="text-outline text-[10px] font-code-sm">${esc(f.field)}</span>
+    </span>
     <span class="${valueColor} flex items-center gap-1">${shown}</span>
   </div>`;
 }
 
+// Friendlier phrasing for the scorer's internal vocabulary. Kept as a
+// translation layer next to the raw values (shown alongside, not instead of)
+// so the ledger stays legible to someone who has never read fidelity/models.py.
+const SEVERITY_META = {
+  critical: ["Data lost", "text-error"],
+  degraded: ["Reduced, not lost", "text-on-surface"],
+  note: ["Expected difference", "text-on-surface-variant"],
+};
+const KIND_META = {
+  record_missing: "A whole memory is missing from CockroachDB.",
+  record_unexpected: "CockroachDB has a memory Mem0 never sent.",
+  field_changed: "This value doesn't match what Mem0 had.",
+  precision_quantized: "The value survived, but with less numeric precision than the source.",
+};
+
 function lossHTML(loss) {
   const critical = loss.severity === "critical";
+  const [severityLabel, severityColor] = SEVERITY_META[loss.severity] || [loss.severity, "text-on-surface-variant"];
+  const kindLabel = KIND_META[loss.kind] || loss.kind;
   return `<div class="bg-surface-container border-l-2 ${critical ? "border-error" : "border-outline-variant"} rounded px-3 py-2">
-    <div class="flex flex-wrap gap-2 items-baseline font-label-caps text-label-caps ${critical ? "text-error" : "text-on-surface-variant"}">
-      <span>${esc(loss.severity)}</span><span>${esc(loss.kind)}</span>${loss.field ? `<span>[${esc(loss.field)}]</span>` : ""}
+    <div class="flex flex-wrap gap-2 items-baseline font-label-caps text-label-caps ${severityColor}">
+      <span>${esc(severityLabel)}</span>${loss.field ? `<span class="text-outline">${esc((FIELD_META[loss.field] || [loss.field])[0])}</span>` : ""}
     </div>
-    <p class="font-code-sm text-code-sm text-outline mt-1 break-words">${esc(loss.detail)}</p>
+    <p class="font-code-sm text-code-sm text-outline mt-1 break-words">${esc(kindLabel)} ${esc(loss.detail)}</p>
   </div>`;
 }
 
-function setVerdict(icon, text, colorClass) {
+// One line of plain English under the big verdict so "MIGRATION DEGRADED" (a
+// state most visitors have never had reason to distinguish from "LOSSY")
+// reads as a claim about what actually happened, not just a color.
+const VERDICT_EXPLAIN = {
+  intact: "Every piece of data on every memory arrived exactly as it left Mem0.",
+  degraded: "Nothing was lost. One value has less numeric precision than the source, which is expected and bounded.",
+  lossy: "At least one piece of data is missing or wrong. This is real data loss, not an artifact of the check.",
+};
+
+function setVerdict(icon, text, colorClass, explainKey) {
   $("ledger-verdict-icon").textContent = icon;
   $("ledger-verdict-text").textContent = text;
   $("ledger-verdict").className = `font-headline-lg text-headline-lg tracking-widest font-bold flex items-center gap-3 ${colorClass}`;
+  $("ledger-explain").textContent = VERDICT_EXPLAIN[explainKey] || "";
 }
 
 async function loadFidelity(nextMode) {
@@ -524,16 +583,16 @@ async function loadFidelity(nextMode) {
     // bounded loss, not corruption. Painting that the same red as a CRITICAL
     // loss would erase the one distinction compare_vector exists to draw.
     if (data.intact) {
-      setVerdict("verified_user", "MIGRATION INTACT", "text-tertiary drop-shadow-[0_0_8px_rgba(0,220,229,0.3)]");
+      setVerdict("verified_user", "MIGRATION INTACT", "text-tertiary drop-shadow-[0_0_8px_rgba(0,220,229,0.3)]", "intact");
     } else if (data.critical_count === 0) {
-      setVerdict("warning", "MIGRATION DEGRADED", "text-on-surface");
+      setVerdict("warning", "MIGRATION DEGRADED", "text-on-surface", "degraded");
     } else {
-      setVerdict("error", "MIGRATION LOSSY", "text-error");
+      setVerdict("error", "MIGRATION LOSSY", "text-error", "lossy");
     }
 
     $("ledger-sub").textContent = data.intact
-      ? `mem0 → cockroachdb · ${data.aligned}/${data.source_records} records aligned by content fingerprint`
-      : `worst field ${data.overall.toFixed(3)} · ${data.critical_count} critical`;
+      ? `${data.aligned} of ${data.source_records} memories matched Mem0 → CockroachDB, by comparing their content`
+      : `${data.critical_count} field${data.critical_count === 1 ? "" : "s"} lost data · ${Math.round(data.overall * 100)}% overall score`;
     $("ledger-caption").textContent = data.mode_label || "";
     $("ledger-fields").innerHTML = data.fields.map(fieldHTML).join("");
     $("ledger-losses").innerHTML = data.losses.length ? data.losses.map(lossHTML).join("") : "";
