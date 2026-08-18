@@ -1,5 +1,9 @@
 # MemBridge
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+[![Tests: 107 passing](https://img.shields.io/badge/tests-107%20passing-brightgreen.svg)](#tests)
+
 **Migrating agent memory between stores without lying about what survived.**
 
 An agent's memory is the one part of it you cannot regenerate. Prompts can be
@@ -37,6 +41,14 @@ Mem0 (Qdrant + local LLM)  ──read──▶  CMM  ──write──▶  Cockr
                     S3 static demo site
 ```
 
+**Contents:** [The result](#the-result) ·
+[Which tools](#which-tools-and-what-each-one-does) ·
+[What makes this different](#what-makes-this-different-from-a-rag-demo) ·
+[Running it](#running-it) ·
+[Layout](#layout) ·
+[Tests](#tests) ·
+[Team](#team)
+
 ---
 
 ## The result
@@ -73,6 +85,12 @@ $ membridge search "what food can I not eat" --user-id john_001
 The agent cannot tell which of its memories were migrated. That is the point: a
 memory layer that treats migrated records as second-class has not really
 migrated them.
+
+Five is the size of the ground-truth fixture, not the scale being tested. The
+CockroachDB target these five landed in holds 1061 records total — the 5
+migrated, 56 written natively for the same user, and 1000 bulk records under
+other users — and every search and every fidelity score above runs against
+that whole table, not a slice pulled out for the demo.
 
 ---
 
@@ -142,6 +160,13 @@ memories" is. These are the specific places MemBridge refuses to be:
 - **Vendor data that CMM does not model is preserved, namespaced, verbatim.**
   A test asserts every field Mem0 can emit has a declared destination; add a
   field to Mem0's output and it fails.
+
+- **Migration throughput is not oversold.** `CockroachWriter` inserts one
+  record at a time on purpose — CockroachDB's own guidance is that large
+  batched `VECTOR` writes degrade — so migrating 1000 records from India to
+  `us-east-1` took several minutes, not seconds. A migration of real size wants
+  the writer running next to the cluster. Streaming a source larger than
+  memory is open work, tracked as such in `CLAUDE.md`, not assumed away.
 
 Every vendor behaviour above was found by reading the installed source, not the
 documentation. Several contradict what the documentation implies.
